@@ -52,7 +52,7 @@ jobs:
       run: |
         # Supprimer tout SDK existant
         sudo rm -rf $HOME/.buildozer/android/platform/android-sdk || true
-        sudo rm -rf $HOME/.buildozer/android/platform/android-ndk || true
+        sudo rm -rf $HOME/.buildozer/android/platform/android-ndk* || true
         
         # Créer les répertoires buildozer
         mkdir -p $HOME/.buildozer/android/platform
@@ -68,13 +68,14 @@ jobs:
         # Télécharger Android NDK
         wget -q https://dl.google.com/android/repository/android-ndk-r25c-linux.zip
         unzip -q android-ndk-r25c-linux.zip
-        mv android-ndk-r25c android-ndk-r25c
+        # Correction : renommer correctement le dossier NDK
+        mv android-ndk-r25c android-ndk
         rm android-ndk-r25c-linux.zip
         
         # Configurer les variables d'environnement
         echo "ANDROID_HOME=$HOME/.buildozer/android/platform/android-sdk" >> $GITHUB_ENV
         echo "ANDROID_SDK_ROOT=$HOME/.buildozer/android/platform/android-sdk" >> $GITHUB_ENV
-        echo "ANDROID_NDK_HOME=$HOME/.buildozer/android/platform/android-ndk-r25c" >> $GITHUB_ENV
+        echo "ANDROID_NDK_HOME=$HOME/.buildozer/android/platform/android-ndk" >> $GITHUB_ENV
         echo "$HOME/.buildozer/android/platform/android-sdk/cmdline-tools/latest/bin" >> $GITHUB_PATH
         echo "$HOME/.buildozer/android/platform/android-sdk/platform-tools" >> $GITHUB_PATH
     
