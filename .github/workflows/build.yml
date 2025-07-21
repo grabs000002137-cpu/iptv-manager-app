@@ -8,7 +8,7 @@ on:
 jobs:
   build-apk:
     runs-on: ubuntu-22.04
-    timeout-minutes: 90
+    timeout-minutes: 120
     
     steps:
     - name: 📥 Checkout Repository
@@ -48,42 +48,54 @@ jobs:
           ccache \
           cmake
     
-    - name: 📱 Setup Android SDK
+    - name: 📱 Setup Android SDK (Forced)
       run: |
-        # Créer les répertoires
-        mkdir -p $HOME/android-sdk/cmdline-tools
-        cd $HOME
+        # Supprimer tout SDK existant
+        sudo rm -rf $HOME/.buildozer/android/platform/android-sdk || true
+        sudo rm -rf $HOME/.buildozer/android/platform/android-ndk || true
         
-        # Télécharger Android SDK Command Line Tools
+        # Créer les répertoires buildozer
+        mkdir -p $HOME/.buildozer/android/platform
+        
+        # Télécharger et installer Android SDK
+        cd $HOME/.buildozer/android/platform
         wget -q https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip
         unzip -q commandlinetools-linux-9477386_latest.zip
+        mkdir -p android-sdk/cmdline-tools
         mv cmdline-tools android-sdk/cmdline-tools/latest
         rm commandlinetools-linux-9477386_latest.zip
         
         # Télécharger Android NDK
         wget -q https://dl.google.com/android/repository/android-ndk-r25c-linux.zip
         unzip -q android-ndk-r25c-linux.zip
-        mv android-ndk-r25c android-ndk
+        mv android-ndk-r25c android-ndk-r25c
         rm android-ndk-r25c-linux.zip
         
         # Configurer les variables d'environnement
-        echo "ANDROID_HOME=$HOME/android-sdk" >> $GITHUB_ENV
-        echo "ANDROID_SDK_ROOT=$HOME/android-sdk" >> $GITHUB_ENV
-        echo "ANDROID_NDK_HOME=$HOME/android-ndk" >> $GITHUB_ENV
-        echo "PATH=$PATH:$HOME/android-sdk/cmdline-tools/latest/bin:$HOME/android-sdk/platform-tools" >> $GITHUB_ENV
+        echo "ANDROID_HOME=$HOME/.buildozer/android/platform/android-sdk" >> $GITHUB_ENV
+        echo "ANDROID_SDK_ROOT=$HOME/.buildozer/android/platform/android-sdk" >> $GITHUB_ENV
+        echo "ANDROID_NDK_HOME=$HOME/.buildozer/android/platform/android-ndk-r25c" >> $GITHUB_ENV
+        echo "$HOME/.buildozer/android/platform/android-sdk/cmdline-tools/latest/bin" >> $GITHUB_PATH
+        echo "$HOME/.buildozer/android/platform/android-sdk/platform-tools" >> $GITHUB_PATH
     
     - name: 🔧 Install Android SDK Components
       run: |
-        # Accepter les licences
-        yes | $HOME/android-sdk/cmdline-tools/latest/bin/sdkmanager --licenses
+        # Accepter TOUTES les licences automatiquement
+        mkdir -p $HOME/.buildozer/android/platform/android-sdk/licenses
+        echo "601085b94cd77f0b54ff86406957099ebe79c4d6" > $HOME/.buildozer/android/platform/android-sdk/licenses/android-googletv-license
+        echo "24333f8a63b6825ea9c5514f83c2829b004d1fee" > $HOME/.buildozer/android/platform/android-sdk/licenses/android-sdk-license
+        echo "84831b9409646a918e30573bab4c9c91346d8abd" > $HOME/.buildozer/android/platform/android-sdk/licenses/android-sdk-preview-license
+        echo "d975f751698a77b662f1254ddbeed3901e976f5a" > $HOME/.buildozer/android/platform/android-sdk/licenses/intel-android-extra-license
+        echo "33b6a2b64607f11b759f320ef9dff4ae5c47d97a" > $HOME/.buildozer/android/platform/android-sdk/licenses/google-gdk-license
         
-        # Installer les composants SDK
-        $HOME/android-sdk/cmdline-tools/latest/bin/sdkmanager \
+        # Installer les composants SDK avec les bonnes versions
+        $HOME/.buildozer/android/platform/android-sdk/cmdline-tools/latest/bin/sdkmanager \
           "platform-tools" \
           "platforms;android-33" \
           "platforms;android-28" \
           "build-tools;33.0.2" \
-          "build-tools;30.0.3"
+          "build-tools;30.0.3" \
+          --sdk_root=$HOME/.buildozer/android/platform/android-sdk
     
     - name: 📦 Install Python Dependencies
       run: |
@@ -92,65 +104,66 @@ jobs:
         pip install cython==0.29.33
         pip install -r requirements.txt
     
-    - name: 🔧 Configure Buildozer Environment
+    - name: 🔧 Force Buildozer Configuration
       run: |
-        # Créer le fichier de configuration buildozer local
-        export ANDROID_HOME=$HOME/android-sdk
-        export ANDROID_SDK_ROOT=$HOME/android-sdk
-        export ANDROID_NDK_HOME=$HOME/android-ndk
+        # Créer un buildozer.spec modifié qui force les bonnes versions
+        cat >> buildozer.spec << 'EOF'
+        
+        # Configuration forcée pour GitHub Actions
+        [buildozer:global]
+        android.sdk_path = ~/.buildozer/android/platform/android-sdk
+        android.ndk_path = ~/.buildozer/android/platform/android-ndk-r25c
+        android.ant_path = ~/.buildozer/android/platform/apache-ant-1.9.4
+        EOF
+        
+        # Configurer les variables d'environnement pour buildozer
+        export ANDROID_HOME=$HOME/.buildozer/android/platform/android-sdk
+        export ANDROID_SDK_ROOT=$HOME/.buildozer/android/platform/android-sdk
+        export ANDROID_NDK_HOME=$HOME/.buildozer/android/platform/android-ndk-r25c
         export PATH=$PATH:$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools
         
-        # Vérifier la configuration
+        # Vérifier que tout est en place
+        echo "Vérification des chemins:"
         echo "ANDROID_HOME: $ANDROID_HOME"
-        echo "ANDROID_SDK_ROOT: $ANDROID_SDK_ROOT" 
-        echo "ANDROID_NDK_HOME: $ANDROID_NDK_HOME"
-        
-        # Vérifier que les outils sont accessibles
-        which sdkmanager || echo "sdkmanager not found"
-        ls -la $ANDROID_HOME/cmdline-tools/latest/bin/ || echo "cmdline-tools not found"
+        echo "Android SDK: $(ls $ANDROID_HOME 2>/dev/null || echo 'NOT FOUND')"
+        echo "Build-tools: $(ls $ANDROID_HOME/build-tools 2>/dev/null || echo 'NOT FOUND')"
+        echo "NDK: $(ls $HOME/.buildozer/android/platform/android-ndk-r25c 2>/dev/null || echo 'NOT FOUND')"
     
     - name: 🏗️ Build APK with Buildozer
       run: |
-        # Configurer l'environnement pour buildozer
-        export ANDROID_HOME=$HOME/android-sdk
-        export ANDROID_SDK_ROOT=$HOME/android-sdk
-        export ANDROID_NDK_HOME=$HOME/android-ndk
+        # Configurer l'environnement
+        export ANDROID_HOME=$HOME/.buildozer/android/platform/android-sdk
+        export ANDROID_SDK_ROOT=$HOME/.buildozer/android/platform/android-sdk
+        export ANDROID_NDK_HOME=$HOME/.buildozer/android/platform/android-ndk-r25c
         export PATH=$PATH:$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools
         
-        # Construire l'APK directement (sans clean)
+        # Construire l'APK
         echo "=== Début de la construction APK ==="
-        buildozer android debug
+        buildozer android debug --verbose
         
         echo "=== Construction terminée ==="
     
     - name: 📋 Find and List APK Files
+      if: always()
       run: |
-        echo "=== Recherche des fichiers APK ==="
+        echo "=== Recherche exhaustive des fichiers APK ==="
         
-        # Rechercher dans bin/
-        if [ -d "bin" ]; then
-          echo "Contenu du dossier bin/:"
-          ls -la bin/
-        fi
+        # Recherche dans tous les dossiers possibles
+        find . -name "*.apk" -type f 2>/dev/null | while read apk; do
+          echo "✅ APK trouvée: $apk"
+          ls -lh "$apk"
+        done
         
-        # Rechercher dans .buildozer/
-        if [ -d ".buildozer" ]; then
-          echo "Recherche dans .buildozer/:"
-          find .buildozer -name "*.apk" -type f -exec ls -la {} \;
-        fi
+        # Cas particuliers de recherche
+        echo "=== Recherche dans bin/ ==="
+        ls -la bin/ 2>/dev/null || echo "Dossier bin/ introuvable"
         
-        # Recherche globale
-        echo "Recherche globale d'APK:"
-        find . -name "*.apk" -type f 2>/dev/null | head -10
+        echo "=== Recherche dans .buildozer/ ==="
+        find .buildozer -name "*.apk" -type f 2>/dev/null | head -5
         
-        # Lister les fichiers trouvés
-        APK_FILES=$(find . -name "*.apk" -type f 2>/dev/null)
-        if [ -n "$APK_FILES" ]; then
-          echo "✅ APK trouvées:"
-          echo "$APK_FILES"
-        else
-          echo "❌ Aucune APK trouvée"
-        fi
+        # Compter les APK
+        APK_COUNT=$(find . -name "*.apk" -type f 2>/dev/null | wc -l)
+        echo "=== Total: $APK_COUNT fichier(s) APK trouvé(s) ==="
     
     - name: 📤 Upload APK as Artifact
       uses: actions/upload-artifact@v4
@@ -161,6 +174,7 @@ jobs:
           bin/*.apk
           .buildozer/android/platform/build-*/outputs/apk/debug/*.apk
           .buildozer/android/platform/build-*/outputs/apk/*/*.apk
+          .buildozer/**/outputs/**/*.apk
           **/*.apk
         if-no-files-found: warn
         retention-days: 30
@@ -175,12 +189,18 @@ jobs:
         if [ $APK_COUNT -gt 0 ]; then
           echo "✅ **APK générée avec succès !**" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "📥 **Pour télécharger :** Allez dans l'onglet 'Actions' → Cliquez sur ce build → Téléchargez 'IPTV-Manager-APK'" >> $GITHUB_STEP_SUMMARY
+          echo "📥 **Comment télécharger :**" >> $GITHUB_STEP_SUMMARY
+          echo "1. Allez dans l'onglet 'Actions' de votre repository" >> $GITHUB_STEP_SUMMARY
+          echo "2. Cliquez sur ce build terminé" >> $GITHUB_STEP_SUMMARY
+          echo "3. Téléchargez l'artifact 'IPTV-Manager-APK'" >> $GITHUB_STEP_SUMMARY
+          echo "4. Dézippez le fichier téléchargé" >> $GITHUB_STEP_SUMMARY
+          echo "5. Installez l'APK sur votre téléphone Android" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**APK trouvées ($APK_COUNT fichier(s)) :**" >> $GITHUB_STEP_SUMMARY
-          find . -name "*.apk" -type f -exec echo "- {}" \; >> $GITHUB_STEP_SUMMARY 2>/dev/null
+          find . -name "*.apk" -type f -exec echo "- {}" \; >> $GITHUB_STEP_SUMMARY 2>/dev/null | head -10
         else
           echo "❌ **Aucune APK générée**" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "📋 **Dépannage :** Vérifiez les logs des étapes précédentes pour identifier le problème." >> $GITHUB_STEP_SUMMARY
+          echo "📋 **Dépannage :** Consultez les logs des étapes précédentes." >> $GITHUB_STEP_SUMMARY
+          echo "Si le problème persiste, il peut y avoir une erreur dans le code Python." >> $GITHUB_STEP_SUMMARY
         fi
