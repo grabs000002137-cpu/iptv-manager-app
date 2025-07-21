@@ -1,4 +1,4 @@
-name: Build IPTV Manager APK
+name: Build IPTV Manager APK with P4A
 
 on:
   push:
@@ -8,157 +8,253 @@ on:
 jobs:
   build:
     runs-on: ubuntu-22.04
-    timeout-minutes: 90
+    timeout-minutes: 120
 
     steps:
-    - name: 📥 Checkout code
+    - name: 📥 Checkout Repository
       uses: actions/checkout@v4
 
-    - name: 🐍 Set up Python
+    - name: 🐍 Setup Python 3.10
       uses: actions/setup-python@v4
       with:
         python-version: '3.10'
 
-    - name: ☕ Set up JDK
+    - name: ☕ Setup Java JDK 17
       uses: actions/setup-java@v4
       with:
         distribution: 'temurin'
         java-version: '17'
 
-    - name: 🛠️ Install system dependencies
+    - name: 🛠️ Install System Dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y build-essential git zip unzip libssl-dev libffi-dev zlib1g-dev
+        sudo apt-get install -y \
+          build-essential \
+          git \
+          zip \
+          unzip \
+          libssl-dev \
+          libffi-dev \
+          libbz2-dev \
+          libreadline-dev \
+          libsqlite3-dev \
+          libncurses5-dev \
+          libncursesw5-dev \
+          autoconf \
+          automake \
+          libtool \
+          pkg-config \
+          zlib1g-dev \
+          ccache \
+          cmake \
+          ninja-build
 
-    - name: 📦 Install Python dependencies first
+    - name: 📱 Setup Android SDK & NDK
       run: |
-        python -m pip install --upgrade pip
-        pip install buildozer cython==0.29.33
-        pip install -r requirements.txt
-
-    - name: 📱 Setup Android SDK in buildozer directory
-      run: |
-        # Créer la structure que buildozer attend
-        mkdir -p $HOME/.buildozer/android/platform
-        cd $HOME/.buildozer/android/platform
+        # Créer les dossiers
+        mkdir -p $HOME/android-sdk/cmdline-tools
         
-        # Android SDK
+        # Android SDK Command Line Tools
+        cd $HOME
         wget -q https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip
         unzip -q commandlinetools-linux-9477386_latest.zip
-        mkdir -p android-sdk/cmdline-tools
         mv cmdline-tools android-sdk/cmdline-tools/latest
         rm commandlinetools-linux-9477386_latest.zip
         
         # Android NDK
         wget -q https://dl.google.com/android/repository/android-ndk-r25c-linux.zip
         unzip -q android-ndk-r25c-linux.zip
+        mv android-ndk-r25c android-ndk
         rm android-ndk-r25c-linux.zip
         
-        # Variables pour buildozer
-        echo "ANDROID_HOME=$HOME/.buildozer/android/platform/android-sdk" >> $GITHUB_ENV
-        echo "ANDROID_SDK_ROOT=$HOME/.buildozer/android/platform/android-sdk" >> $GITHUB_ENV
-        echo "ANDROID_NDK_HOME=$HOME/.buildozer/android/platform/android-ndk-r25c" >> $GITHUB_ENV
+        # Variables d'environnement
+        echo "ANDROID_HOME=$HOME/android-sdk" >> $GITHUB_ENV
+        echo "ANDROID_SDK_ROOT=$HOME/android-sdk" >> $GITHUB_ENV
+        echo "ANDROID_NDK_HOME=$HOME/android-ndk" >> $GITHUB_ENV
+        echo "NDK_API=21" >> $GITHUB_ENV
+        echo "PATH=$PATH:$HOME/android-sdk/cmdline-tools/latest/bin:$HOME/android-sdk/platform-tools" >> $GITHUB_ENV
 
-    - name: 🔧 Pre-install Android components with correct versions
+    - name: 🔧 Install Android SDK Components
       run: |
-        ANDROID_SDK=$HOME/.buildozer/android/platform/android-sdk
+        # Accepter les licences
+        yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses
         
-        # Créer le dossier licenses et accepter les licences
-        mkdir -p $ANDROID_SDK/licenses
-        echo "601085b94cd77f0b54ff86406957099ebe79c4d6" > $ANDROID_SDK/licenses/android-googletv-license
-        echo "24333f8a63b6825ea9c5514f83c2829b004d1fee" > $ANDROID_SDK/licenses/android-sdk-license
-        echo "84831b9409646a918e30573bab4c9c91346d8abd" > $ANDROID_SDK/licenses/android-sdk-preview-license
-        
-        # Installer les bons build-tools
-        $ANDROID_SDK/cmdline-tools/latest/bin/sdkmanager \
+        # Installer les composants nécessaires
+        $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager \
           "platform-tools" \
           "platforms;android-33" \
           "platforms;android-28" \
           "build-tools;33.0.2" \
           "build-tools;30.0.3"
-        
-        echo "=== Vérification installation ==="
-        ls -la $ANDROID_SDK/build-tools/
 
-    - name: 🔧 Patch buildozer to use correct build-tools
+    - name: 📦 Install Python Dependencies
       run: |
-        # Créer un script qui patch buildozer pour utiliser les bonnes versions
-        cat > patch_buildozer.py << 'EOF'
-        import os
-        import subprocess
-        import sys
-        
-        # Configurer les variables d'environnement
-        android_sdk = os.path.expanduser("~/.buildozer/android/platform/android-sdk")
-        android_ndk = os.path.expanduser("~/.buildozer/android/platform/android-ndk-r25c")
-        
-        os.environ["ANDROID_HOME"] = android_sdk
-        os.environ["ANDROID_SDK_ROOT"] = android_sdk
-        os.environ["ANDROID_NDK_HOME"] = android_ndk
-        os.environ["ANDROID_NDK_ROOT"] = android_ndk
-        
-        # Vérifier que build-tools existe
-        build_tools_dir = os.path.join(android_sdk, "build-tools")
-        if os.path.exists(build_tools_dir):
-            versions = os.listdir(build_tools_dir)
-            print(f"Build-tools disponibles: {versions}")
-            
-            # Utiliser la version 33.0.2 si disponible
-            if "33.0.2" in versions:
-                os.environ["ANDROID_BUILD_TOOLS"] = "33.0.2"
-                print("Utilisation de build-tools 33.0.2")
-        
-        # Lancer buildozer
-        try:
-            result = subprocess.run([sys.executable, "-m", "buildozer", "android", "debug"], 
-                                  env=os.environ, check=True)
-            print("✅ Build réussie!")
-        except subprocess.CalledProcessError as e:
-            print(f"❌ Erreur build: {e}")
-            sys.exit(1)
-        EOF
-        
-        python patch_buildozer.py
+        python -m pip install --upgrade pip wheel setuptools
+        pip install python-for-android
+        pip install cython==0.29.33
+        pip install colorama appdirs jinja2 six
+        pip install -r requirements.txt
 
-    - name: 📋 Find APK files
+    - name: 🔧 Prepare Build Environment
+      run: |
+        # Créer un dossier de travail propre
+        mkdir -p p4a_build
+        cd p4a_build
+        
+        # Copier les fichiers sources
+        cp ../main.py .
+        cp ../requirements.txt .
+        
+        # Créer un main.py compatible P4A si nécessaire
+        echo "✅ Fichiers préparés pour P4A"
+        ls -la
+
+    - name: 🏗️ Build APK with Python-for-Android
+      run: |
+        cd p4a_build
+        
+        # Configurer l'environnement
+        export ANDROID_HOME=$HOME/android-sdk
+        export ANDROID_SDK_ROOT=$HOME/android-sdk
+        export ANDROID_NDK_HOME=$HOME/android-ndk
+        export NDK_API=21
+        export PATH=$PATH:$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools
+        
+        echo "=== Configuration P4A ==="
+        echo "ANDROID_HOME: $ANDROID_HOME"
+        echo "ANDROID_NDK_HOME: $ANDROID_NDK_HOME"
+        
+        echo "=== Début de la construction avec P4A ==="
+        
+        # Build APK avec python-for-android
+        p4a apk \
+          --private . \
+          --package=com.iptv.manager \
+          --name="IPTV Manager" \
+          --version=1.0 \
+          --bootstrap=sdl2 \
+          --requirements=python3,kivy==2.1.0,requests,pyjnius,plyer \
+          --permission=INTERNET \
+          --permission=WRITE_EXTERNAL_STORAGE \
+          --permission=READ_EXTERNAL_STORAGE \
+          --permission=ACCESS_NETWORK_STATE \
+          --arch=arm64-v8a \
+          --release \
+          --debug
+        
+        echo "=== Construction P4A terminée ==="
+
+    - name: 📋 Find APK Files
       if: always()
       run: |
-        echo "=== Recherche APK ==="
-        find . -name "*.apk" -type f 2>/dev/null || echo "Aucune APK trouvée dans le répertoire courant"
+        echo "=== Recherche exhaustive des APK ==="
         
-        echo "=== Recherche dans .buildozer ==="
-        find $HOME/.buildozer -name "*.apk" -type f 2>/dev/null || echo "Aucune APK dans .buildozer"
+        # Recherche globale
+        find . -name "*.apk" -type f 2>/dev/null | while read apk; do
+          echo "✅ APK trouvée: $apk"
+          ls -lh "$apk"
+        done
         
-        echo "=== Recherche globale ==="
-        find /home/runner -name "*.apk" -type f 2>/dev/null | head -5 || echo "Aucune APK trouvée"
+        # Recherche dans les dossiers typiques de P4A
+        echo "=== Recherche dans les dossiers P4A ==="
+        find $HOME/.local -name "*.apk" -type f 2>/dev/null | head -5
+        find $HOME -name "dist" -type d 2>/dev/null | while read dist_dir; do
+          echo "Contenu de $dist_dir:"
+          find "$dist_dir" -name "*.apk" -type f 2>/dev/null
+        done
+        
+        # Dossiers de build P4A
+        if [ -d "p4a_build" ]; then
+          echo "Contenu p4a_build:"
+          find p4a_build -name "*.apk" -type f 2>/dev/null
+        fi
+        
+        # Compter les APK
+        APK_COUNT=$(find . -name "*.apk" -type f 2>/dev/null | wc -l)
+        echo "=== Total: $APK_COUNT fichier(s) APK trouvé(s) ==="
 
-    - name: 📤 Upload APK
+    - name: 🔄 Alternative Build Method (si premier échec)
+      if: always()
+      run: |
+        echo "=== Tentative de build alternatif ==="
+        
+        # Essayer avec buildozer si P4A échoue
+        pip install buildozer
+        
+        # Créer un buildozer.spec minimal
+        cat > buildozer_minimal.spec << 'EOF'
+        [app]
+        title = IPTV Manager
+        package.name = iptvmanager
+        package.domain = com.iptv.manager
+        source.dir = .
+        version = 1.0
+        requirements = python3,kivy==2.1.0,requests,pyjnius,plyer,android
+        android.permissions = INTERNET,WRITE_EXTERNAL_STORAGE,READ_EXTERNAL_STORAGE,ACCESS_NETWORK_STATE
+        
+        [buildozer]
+        log_level = 2
+        
+        [android]
+        android.api = 33
+        android.minapi = 21
+        android.ndk_api = 21
+        android.sdk = 33
+        android.ndk = 25c
+        android.archs = arm64-v8a
+        android.accept_sdk_license = True
+        EOF
+        
+        # Essayer buildozer avec notre SDK
+        export ANDROID_HOME=$HOME/android-sdk
+        export ANDROID_SDK_ROOT=$HOME/android-sdk
+        export ANDROID_NDK_HOME=$HOME/android-ndk
+        
+        buildozer --profile minimal android debug || echo "Buildozer également échoué"
+        
+        # Recherche finale
+        find . -name "*.apk" -type f 2>/dev/null
+
+    - name: 📤 Upload APK Artifact
       uses: actions/upload-artifact@v4
       if: always()
       with:
-        name: IPTV-Manager-APK
+        name: IPTV-Manager-APK-P4A
         path: |
+          **/*.apk
+          p4a_build/**/*.apk
           bin/*.apk
           .buildozer/**/outputs/**/*.apk
-          /home/runner/.buildozer/**/outputs/**/*.apk
-          **/*.apk
         if-no-files-found: warn
+        retention-days: 30
 
-    - name: 📊 Build summary
+    - name: 📊 Build Summary
       if: always()
       run: |
+        echo "### 📱 IPTV Manager APK Build Results" >> $GITHUB_STEP_SUMMARY
+        
         APK_COUNT=$(find . -name "*.apk" -type f 2>/dev/null | wc -l)
-        echo "### 📱 IPTV Manager Build Result" >> $GITHUB_STEP_SUMMARY
         
         if [ $APK_COUNT -gt 0 ]; then
-          echo "✅ **APK Generated Successfully!**" >> $GITHUB_STEP_SUMMARY
+          echo "✅ **APK Successfully Generated!**" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "📥 **Download Instructions:**" >> $GITHUB_STEP_SUMMARY
-          echo "1. Go to the Actions tab" >> $GITHUB_STEP_SUMMARY
+          echo "🎉 **Your IPTV Manager APK is ready!**" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "📥 **How to Download:**" >> $GITHUB_STEP_SUMMARY
+          echo "1. Click on the **Actions** tab in your repository" >> $GITHUB_STEP_SUMMARY
           echo "2. Click on this completed build" >> $GITHUB_STEP_SUMMARY
-          echo "3. Download 'IPTV-Manager-APK' artifact" >> $GITHUB_STEP_SUMMARY
-          echo "4. Unzip and install on Android device" >> $GITHUB_STEP_SUMMARY
+          echo "3. Scroll down to **Artifacts**" >> $GITHUB_STEP_SUMMARY
+          echo "4. Download **IPTV-Manager-APK-P4A**" >> $GITHUB_STEP_SUMMARY
+          echo "5. Unzip the downloaded file" >> $GITHUB_STEP_SUMMARY
+          echo "6. Install the APK on your Android device" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**APK Files Found ($APK_COUNT total):**" >> $GITHUB_STEP_SUMMARY
+          find . -name "*.apk" -type f -exec echo "- {}" \; >> $GITHUB_STEP_SUMMARY 2>/dev/null | head -10
         else
-          echo "❌ **No APK generated**" >> $GITHUB_STEP_SUMMARY
-          echo "Check the build logs above for errors." >> $GITHUB_STEP_SUMMARY
+          echo "❌ **No APK Generated**" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Troubleshooting:**" >> $GITHUB_STEP_SUMMARY
+          echo "- Check the build logs above for errors" >> $GITHUB_STEP_SUMMARY
+          echo "- Verify that main.py contains valid Python code" >> $GITHUB_STEP_SUMMARY
+          echo "- Ensure all dependencies are correctly specified" >> $GITHUB_STEP_SUMMARY
         fi
