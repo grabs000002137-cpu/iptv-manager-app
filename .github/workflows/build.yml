@@ -30,70 +30,107 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y build-essential git zip unzip libssl-dev libffi-dev zlib1g-dev
 
-    - name: 📱 Setup Android environment
-      run: |
-        # Variables
-        ANDROID_SDK_ROOT=$HOME/android-sdk
-        ANDROID_NDK_ROOT=$HOME/android-ndk
-        
-        # Créer les dossiers
-        mkdir -p $ANDROID_SDK_ROOT/cmdline-tools
-        
-        # Android SDK
-        cd $HOME
-        wget -q https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip
-        unzip -q commandlinetools-linux-9477386_latest.zip
-        mv cmdline-tools $ANDROID_SDK_ROOT/cmdline-tools/latest
-        rm commandlinetools-linux-9477386_latest.zip
-        
-        # Android NDK
-        wget -q https://dl.google.com/android/repository/android-ndk-r25c-linux.zip
-        unzip -q android-ndk-r25c-linux.zip
-        mv android-ndk-r25c $ANDROID_NDK_ROOT
-        rm android-ndk-r25c-linux.zip
-        
-        # Variables d'environnement
-        echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT" >> $GITHUB_ENV
-        echo "ANDROID_NDK_ROOT=$ANDROID_NDK_ROOT" >> $GITHUB_ENV
-        echo "PATH=$PATH:$ANDROID_SDK_ROOT/cmdline-tools/latest/bin:$ANDROID_SDK_ROOT/platform-tools" >> $GITHUB_ENV
-
-    - name: 🔧 Install Android components
-      run: |
-        # Accepter les licences
-        yes | $ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager --licenses
-        
-        # Installer les outils
-        $ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager \
-          "platform-tools" \
-          "platforms;android-33" \
-          "build-tools;33.0.2"
-
-    - name: 📦 Install Python dependencies
+    - name: 📦 Install Python dependencies first
       run: |
         python -m pip install --upgrade pip
         pip install buildozer cython==0.29.33
         pip install -r requirements.txt
 
-    - name: 🏗️ Build APK
+    - name: 📱 Setup Android SDK in buildozer directory
       run: |
-        # Configurer l'environnement
-        export ANDROID_SDK_ROOT=$HOME/android-sdk
-        export ANDROID_NDK_ROOT=$HOME/android-ndk
-        export PATH=$PATH:$ANDROID_SDK_ROOT/cmdline-tools/latest/bin:$ANDROID_SDK_ROOT/platform-tools
+        # Créer la structure que buildozer attend
+        mkdir -p $HOME/.buildozer/android/platform
+        cd $HOME/.buildozer/android/platform
         
-        # Construire
-        buildozer android debug
+        # Android SDK
+        wget -q https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip
+        unzip -q commandlinetools-linux-9477386_latest.zip
+        mkdir -p android-sdk/cmdline-tools
+        mv cmdline-tools android-sdk/cmdline-tools/latest
+        rm commandlinetools-linux-9477386_latest.zip
+        
+        # Android NDK
+        wget -q https://dl.google.com/android/repository/android-ndk-r25c-linux.zip
+        unzip -q android-ndk-r25c-linux.zip
+        rm android-ndk-r25c-linux.zip
+        
+        # Variables pour buildozer
+        echo "ANDROID_HOME=$HOME/.buildozer/android/platform/android-sdk" >> $GITHUB_ENV
+        echo "ANDROID_SDK_ROOT=$HOME/.buildozer/android/platform/android-sdk" >> $GITHUB_ENV
+        echo "ANDROID_NDK_HOME=$HOME/.buildozer/android/platform/android-ndk-r25c" >> $GITHUB_ENV
 
-    - name: 📋 Find APK
+    - name: 🔧 Pre-install Android components with correct versions
+      run: |
+        ANDROID_SDK=$HOME/.buildozer/android/platform/android-sdk
+        
+        # Créer le dossier licenses et accepter les licences
+        mkdir -p $ANDROID_SDK/licenses
+        echo "601085b94cd77f0b54ff86406957099ebe79c4d6" > $ANDROID_SDK/licenses/android-googletv-license
+        echo "24333f8a63b6825ea9c5514f83c2829b004d1fee" > $ANDROID_SDK/licenses/android-sdk-license
+        echo "84831b9409646a918e30573bab4c9c91346d8abd" > $ANDROID_SDK/licenses/android-sdk-preview-license
+        
+        # Installer les bons build-tools
+        $ANDROID_SDK/cmdline-tools/latest/bin/sdkmanager \
+          "platform-tools" \
+          "platforms;android-33" \
+          "platforms;android-28" \
+          "build-tools;33.0.2" \
+          "build-tools;30.0.3"
+        
+        echo "=== Vérification installation ==="
+        ls -la $ANDROID_SDK/build-tools/
+
+    - name: 🔧 Patch buildozer to use correct build-tools
+      run: |
+        # Créer un script qui patch buildozer pour utiliser les bonnes versions
+        cat > patch_buildozer.py << 'EOF'
+        import os
+        import subprocess
+        import sys
+        
+        # Configurer les variables d'environnement
+        android_sdk = os.path.expanduser("~/.buildozer/android/platform/android-sdk")
+        android_ndk = os.path.expanduser("~/.buildozer/android/platform/android-ndk-r25c")
+        
+        os.environ["ANDROID_HOME"] = android_sdk
+        os.environ["ANDROID_SDK_ROOT"] = android_sdk
+        os.environ["ANDROID_NDK_HOME"] = android_ndk
+        os.environ["ANDROID_NDK_ROOT"] = android_ndk
+        
+        # Vérifier que build-tools existe
+        build_tools_dir = os.path.join(android_sdk, "build-tools")
+        if os.path.exists(build_tools_dir):
+            versions = os.listdir(build_tools_dir)
+            print(f"Build-tools disponibles: {versions}")
+            
+            # Utiliser la version 33.0.2 si disponible
+            if "33.0.2" in versions:
+                os.environ["ANDROID_BUILD_TOOLS"] = "33.0.2"
+                print("Utilisation de build-tools 33.0.2")
+        
+        # Lancer buildozer
+        try:
+            result = subprocess.run([sys.executable, "-m", "buildozer", "android", "debug"], 
+                                  env=os.environ, check=True)
+            print("✅ Build réussie!")
+        except subprocess.CalledProcessError as e:
+            print(f"❌ Erreur build: {e}")
+            sys.exit(1)
+        EOF
+        
+        python patch_buildozer.py
+
+    - name: 📋 Find APK files
+      if: always()
       run: |
         echo "=== Recherche APK ==="
-        find . -name "*.apk" -type f || echo "Aucune APK trouvée"
+        find . -name "*.apk" -type f 2>/dev/null || echo "Aucune APK trouvée dans le répertoire courant"
         
-        # Vérifier buildozer
-        if [ -d ".buildozer" ]; then
-          echo "Contenu .buildozer:"
-          find .buildozer -name "*.apk" -type f || echo "Pas d'APK dans .buildozer"
-        fi
+        echo "=== Recherche dans .buildozer ==="
+        find $HOME/.buildozer -name "*.apk" -type f 2>/dev/null || echo "Aucune APK dans .buildozer"
+        
+        echo "=== Recherche globale ==="
+        find /home/runner -name "*.apk" -type f 2>/dev/null | head -5 || echo "Aucune APK trouvée"
 
     - name: 📤 Upload APK
       uses: actions/upload-artifact@v4
@@ -103,20 +140,25 @@ jobs:
         path: |
           bin/*.apk
           .buildozer/**/outputs/**/*.apk
+          /home/runner/.buildozer/**/outputs/**/*.apk
           **/*.apk
         if-no-files-found: warn
 
-    - name: 📊 Summary
+    - name: 📊 Build summary
       if: always()
       run: |
         APK_COUNT=$(find . -name "*.apk" -type f 2>/dev/null | wc -l)
-        echo "### 📱 Build Result" >> $GITHUB_STEP_SUMMARY
+        echo "### 📱 IPTV Manager Build Result" >> $GITHUB_STEP_SUMMARY
         
         if [ $APK_COUNT -gt 0 ]; then
-          echo "✅ **APK Created Successfully!**" >> $GITHUB_STEP_SUMMARY
+          echo "✅ **APK Generated Successfully!**" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "📥 **Download:** Go to Actions tab → Click this build → Download 'IPTV-Manager-APK'" >> $GITHUB_STEP_SUMMARY
+          echo "📥 **Download Instructions:**" >> $GITHUB_STEP_SUMMARY
+          echo "1. Go to the Actions tab" >> $GITHUB_STEP_SUMMARY
+          echo "2. Click on this completed build" >> $GITHUB_STEP_SUMMARY
+          echo "3. Download 'IPTV-Manager-APK' artifact" >> $GITHUB_STEP_SUMMARY
+          echo "4. Unzip and install on Android device" >> $GITHUB_STEP_SUMMARY
         else
           echo "❌ **No APK generated**" >> $GITHUB_STEP_SUMMARY
-          echo "Check build logs for errors." >> $GITHUB_STEP_SUMMARY
+          echo "Check the build logs above for errors." >> $GITHUB_STEP_SUMMARY
         fi
