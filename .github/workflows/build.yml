@@ -1,4 +1,4 @@
-name: Build IPTV Manager APK with P4A
+name: Build IPTV Manager APK with P4A (Signed)
 
 on:
   push:
@@ -87,6 +87,20 @@ jobs:
           "build-tools;33.0.2" \
           "build-tools;30.0.3"
 
+    - name: 🔑 Generate Debug Keystore
+      run: |
+        # Créer un keystore de debug pour signer l'APK
+        mkdir -p ~/.android
+        keytool -genkey -v \
+          -keystore ~/.android/debug.keystore \
+          -storepass android \
+          -alias androiddebugkey \
+          -keypass android \
+          -keyalg RSA \
+          -keysize 2048 \
+          -validity 10000 \
+          -dname "CN=Android Debug,O=Android,C=US"
+
     - name: 📦 Install Python Dependencies
       run: |
         python -m pip install --upgrade pip wheel setuptools
@@ -105,7 +119,6 @@ jobs:
         cp ../main.py .
         cp ../requirements.txt .
         
-        # Créer un main.py compatible P4A si nécessaire
         echo "✅ Fichiers préparés pour P4A"
         ls -la
 
@@ -139,10 +152,48 @@ jobs:
           --permission=READ_EXTERNAL_STORAGE \
           --permission=ACCESS_NETWORK_STATE \
           --arch=arm64-v8a \
-          --release \
-          --debug
+          --release
         
         echo "=== Construction P4A terminée ==="
+
+    - name: 🔏 Sign APK
+      run: |
+        echo "=== Signature de l'APK ==="
+        
+        # Rechercher l'APK générée
+        APK_PATH=$(find . -name "*.apk" -type f | head -1)
+        
+        if [ -n "$APK_PATH" ]; then
+          echo "APK trouvée: $APK_PATH"
+          
+          # Créer le nom du fichier signé
+          SIGNED_APK="IPTV-Manager-signed.apk"
+          
+          # Signer l'APK avec jarsigner
+          jarsigner -verbose \
+            -sigalg SHA1withRSA \
+            -digestalg SHA1 \
+            -keystore ~/.android/debug.keystore \
+            -storepass android \
+            -keypass android \
+            "$APK_PATH" \
+            androiddebugkey
+          
+          # Copier l'APK signée
+          cp "$APK_PATH" "$SIGNED_APK"
+          
+          # Zipalign pour optimiser l'APK
+          if command -v zipalign &> /dev/null; then
+            echo "Optimisation avec zipalign..."
+            zipalign -v 4 "$SIGNED_APK" "IPTV-Manager-aligned.apk"
+            mv "IPTV-Manager-aligned.apk" "$SIGNED_APK"
+          fi
+          
+          echo "✅ APK signée créée: $SIGNED_APK"
+          ls -lh "$SIGNED_APK"
+        else
+          echo "❌ Aucune APK trouvée à signer"
+        fi
 
     - name: 📋 Find APK Files
       if: always()
@@ -153,41 +204,35 @@ jobs:
         find . -name "*.apk" -type f 2>/dev/null | while read apk; do
           echo "✅ APK trouvée: $apk"
           ls -lh "$apk"
+          
+          # Vérifier si l'APK est signée
+          if jarsigner -verify -verbose "$apk" 2>/dev/null; then
+            echo "   ✓ APK signée"
+          else
+            echo "   ⚠ APK non signée"
+          fi
         done
-        
-        # Recherche dans les dossiers typiques de P4A
-        echo "=== Recherche dans les dossiers P4A ==="
-        find $HOME/.local -name "*.apk" -type f 2>/dev/null | head -5
-        find $HOME -name "dist" -type d 2>/dev/null | while read dist_dir; do
-          echo "Contenu de $dist_dir:"
-          find "$dist_dir" -name "*.apk" -type f 2>/dev/null
-        done
-        
-        # Dossiers de build P4A
-        if [ -d "p4a_build" ]; then
-          echo "Contenu p4a_build:"
-          find p4a_build -name "*.apk" -type f 2>/dev/null
-        fi
         
         # Compter les APK
         APK_COUNT=$(find . -name "*.apk" -type f 2>/dev/null | wc -l)
         echo "=== Total: $APK_COUNT fichier(s) APK trouvé(s) ==="
 
-    - name: 🔄 Alternative Build Method (si premier échec)
+    - name: 🔄 Alternative Build Method (Buildozer)
       if: always()
       run: |
-        echo "=== Tentative de build alternatif ==="
+        echo "=== Tentative de build alternatif avec Buildozer ==="
         
-        # Essayer avec buildozer si P4A échoue
+        # Installer buildozer
         pip install buildozer
         
-        # Créer un buildozer.spec minimal
-        cat > buildozer_minimal.spec << 'EOF'
+        # Créer un buildozer.spec optimisé
+        cat > buildozer.spec << 'EOF'
         [app]
         title = IPTV Manager
         package.name = iptvmanager
         package.domain = com.iptv.manager
         source.dir = .
+        source.include_exts = py,png,jpg,kv,atlas,json,txt
         version = 1.0
         requirements = python3,kivy==2.1.0,requests,pyjnius,plyer,android
         android.permissions = INTERNET,WRITE_EXTERNAL_STORAGE,READ_EXTERNAL_STORAGE,ACCESS_NETWORK_STATE
@@ -195,7 +240,7 @@ jobs:
         [buildozer]
         log_level = 2
         
-        [android]
+        [app:android]
         android.api = 33
         android.minapi = 21
         android.ndk_api = 21
@@ -203,24 +248,32 @@ jobs:
         android.ndk = 25c
         android.archs = arm64-v8a
         android.accept_sdk_license = True
+        android.gradle_dependencies = 
+        android.add_src = 
+        android.add_jars = 
+        android.presplash_color = #FFFFFF
+        android.icon = 
+        android.presplash = 
+        android.orientation = portrait
+        android.fullscreen = 0
+        android.auto_backup = True
         EOF
         
-        # Essayer buildozer avec notre SDK
+        # Essayer buildozer
         export ANDROID_HOME=$HOME/android-sdk
         export ANDROID_SDK_ROOT=$HOME/android-sdk
         export ANDROID_NDK_HOME=$HOME/android-ndk
         
-        buildozer --profile minimal android debug || echo "Buildozer également échoué"
-        
-        # Recherche finale
-        find . -name "*.apk" -type f 2>/dev/null
+        cd p4a_build
+        buildozer android debug || echo "Buildozer échoué, mais P4A devrait avoir fonctionné"
 
-    - name: 📤 Upload APK Artifact
+    - name: 📤 Upload APK Artifacts
       uses: actions/upload-artifact@v4
       if: always()
       with:
-        name: IPTV-Manager-APK-P4A
+        name: IPTV-Manager-APK-Signed
         path: |
+          **/*signed*.apk
           **/*.apk
           p4a_build/**/*.apk
           bin/*.apk
@@ -234,6 +287,7 @@ jobs:
         echo "### 📱 IPTV Manager APK Build Results" >> $GITHUB_STEP_SUMMARY
         
         APK_COUNT=$(find . -name "*.apk" -type f 2>/dev/null | wc -l)
+        SIGNED_COUNT=$(find . -name "*signed*.apk" -type f 2>/dev/null | wc -l)
         
         if [ $APK_COUNT -gt 0 ]; then
           echo "✅ **APK Successfully Generated!**" >> $GITHUB_STEP_SUMMARY
@@ -244,17 +298,16 @@ jobs:
           echo "1. Click on the **Actions** tab in your repository" >> $GITHUB_STEP_SUMMARY
           echo "2. Click on this completed build" >> $GITHUB_STEP_SUMMARY
           echo "3. Scroll down to **Artifacts**" >> $GITHUB_STEP_SUMMARY
-          echo "4. Download **IPTV-Manager-APK-P4A**" >> $GITHUB_STEP_SUMMARY
-          echo "5. Unzip the downloaded file" >> $GITHUB_STEP_SUMMARY
-          echo "6. Install the APK on your Android device" >> $GITHUB_STEP_SUMMARY
+          echo "4. Download **IPTV-Manager-APK-Signed**" >> $GITHUB_STEP_SUMMARY
+          echo "5. Unzip and install the **signed.apk** file" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**APK Files Found ($APK_COUNT total):**" >> $GITHUB_STEP_SUMMARY
-          find . -name "*.apk" -type f -exec echo "- {}" \; >> $GITHUB_STEP_SUMMARY 2>/dev/null | head -10
+          echo "**APK Files Found:**" >> $GITHUB_STEP_SUMMARY
+          echo "- Total APK: $APK_COUNT" >> $GITHUB_STEP_SUMMARY
+          echo "- Signed APK: $SIGNED_COUNT" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**🔒 Security Note:** The signed APK should install properly on Android devices." >> $GITHUB_STEP_SUMMARY
         else
           echo "❌ **No APK Generated**" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Troubleshooting:**" >> $GITHUB_STEP_SUMMARY
-          echo "- Check the build logs above for errors" >> $GITHUB_STEP_SUMMARY
-          echo "- Verify that main.py contains valid Python code" >> $GITHUB_STEP_SUMMARY
-          echo "- Ensure all dependencies are correctly specified" >> $GITHUB_STEP_SUMMARY
+          echo "**Check the build logs for errors**" >> $GITHUB_STEP_SUMMARY
         fi
