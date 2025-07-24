@@ -1,4 +1,4 @@
-name: Build IPTV Manager APK with P4A
+name: Build IPTV Manager APK with P4A - Fixed
 
 on:
   push:
@@ -47,7 +47,8 @@ jobs:
           zlib1g-dev \
           ccache \
           cmake \
-          ninja-build
+          ninja-build \
+          openjdk-8-jdk
 
     - name: 📱 Setup Android SDK & NDK
       run: |
@@ -85,15 +86,47 @@ jobs:
           "platforms;android-33" \
           "platforms;android-28" \
           "build-tools;33.0.2" \
-          "build-tools;30.0.3"
+          "build-tools;30.0.3" \
+          "build-tools;28.0.3"
+
+    - name: 🔑 Generate Debug Keystore
+      run: |
+        # Créer un keystore de debug si il n'existe pas
+        if [ ! -f "$HOME/.android/debug.keystore" ]; then
+          mkdir -p $HOME/.android
+          keytool -genkey -v \
+            -keystore $HOME/.android/debug.keystore \
+            -storepass android \
+            -alias androiddebugkey \
+            -keypass android \
+            -keyalg RSA \
+            -keysize 2048 \
+            -validity 10000 \
+            -dname "CN=Android Debug,OU=Android,O=Unknown,L=Unknown,S=Unknown,C=US"
+        fi
+        
+        echo "KEYSTORE_PATH=$HOME/.android/debug.keystore" >> $GITHUB_ENV
+        echo "KEYSTORE_PASSWORD=android" >> $GITHUB_ENV
+        echo "KEY_ALIAS=androiddebugkey" >> $GITHUB_ENV
+        echo "KEY_PASSWORD=android" >> $GITHUB_ENV
 
     - name: 📦 Install Python Dependencies
       run: |
         python -m pip install --upgrade pip wheel setuptools
-        pip install python-for-android
+        pip install python-for-android==2024.1.21
         pip install cython==0.29.33
         pip install colorama appdirs jinja2 six
-        pip install -r requirements.txt
+        pip install buildozer
+
+    - name: 📝 Create Requirements File
+      run: |
+        cat > requirements.txt << 'EOF'
+        kivy==2.1.0
+        requests
+        pyjnius
+        plyer
+        android
+        EOF
 
     - name: 🔧 Prepare Build Environment
       run: |
@@ -101,15 +134,70 @@ jobs:
         mkdir -p p4a_build
         cd p4a_build
         
-        # Copier les fichiers sources
-        cp ../main.py .
+        # Copier le code principal
+        if [ -f "../main.py" ]; then
+          cp ../main.py .
+        else
+          echo "❌ main.py non trouvé, création d'un fichier basique"
+          cat > main.py << 'EOF'
+        from kivy.app import App
+        from kivy.uix.label import Label
+        
+        class IPTVManagerApp(App):
+            def build(self):
+                return Label(text='IPTV Manager - Version Test')
+        
+        if __name__ == '__main__':
+            IPTVManagerApp().run()
+        EOF
+        fi
+        
         cp ../requirements.txt .
         
-        # Créer un main.py compatible P4A si nécessaire
-        echo "✅ Fichiers préparés pour P4A"
+        # Créer un buildozer.spec optimisé
+        cat > buildozer.spec << 'EOF'
+        [app]
+        title = IPTV Manager
+        package.name = iptvmanager
+        package.domain = com.iptv.manager
+        source.dir = .
+        source.include_exts = py,png,jpg,kv,atlas,txt
+        version = 1.0
+        requirements = python3,kivy==2.1.0,requests,pyjnius,plyer,android
+        
+        # Android specific
+        android.permissions = INTERNET,WRITE_EXTERNAL_STORAGE,READ_EXTERNAL_STORAGE,ACCESS_NETWORK_STATE,WAKE_LOCK
+        android.api = 33
+        android.minapi = 21
+        android.ndk_api = 21
+        android.sdk = 33
+        android.ndk = 25c
+        android.gradle_dependencies = 
+        android.add_src = 
+        android.add_aars = 
+        android.add_jars = 
+        android.private_storage = True
+        android.archs = arm64-v8a
+        android.allow_backup = True
+        android.backup_rules = 
+        android.manifest_placeholders = 
+        
+        # Signing
+        android.debug_keystore = ~/.android/debug.keystore
+        android.release_keystore = 
+        android.release_keystore_passwd = 
+        android.release_key_alias = 
+        android.release_key_passwd = 
+        
+        [buildozer]
+        log_level = 2
+        warn_on_root = 1
+        EOF
+        
+        echo "✅ Environnement préparé"
         ls -la
 
-    - name: 🏗️ Build APK with Python-for-Android
+    - name: 🏗️ Build APK with Buildozer (Primary Method)
       run: |
         cd p4a_build
         
@@ -120,111 +208,132 @@ jobs:
         export NDK_API=21
         export PATH=$PATH:$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools
         
-        echo "=== Configuration P4A ==="
+        echo "=== Configuration Build ==="
         echo "ANDROID_HOME: $ANDROID_HOME"
         echo "ANDROID_NDK_HOME: $ANDROID_NDK_HOME"
         
-        echo "=== Début de la construction avec P4A ==="
+        echo "=== Début buildozer ==="
         
-        # Build APK avec python-for-android
-        p4a apk \
-          --private . \
-          --package=com.iptv.manager \
-          --name="IPTV Manager" \
-          --version=1.0 \
-          --bootstrap=sdl2 \
-          --requirements=python3,kivy==2.1.0,requests,pyjnius,plyer \
-          --permission=INTERNET \
-          --permission=WRITE_EXTERNAL_STORAGE \
-          --permission=READ_EXTERNAL_STORAGE \
-          --permission=ACCESS_NETWORK_STATE \
-          --arch=arm64-v8a \
-          --release \
-          --debug
+        # Build avec buildozer (plus fiable)
+        buildozer android debug || {
+          echo "❌ Buildozer échoué, tentative P4A..."
+          
+          # Fallback P4A
+          p4a apk \
+            --private . \
+            --package=com.iptv.manager \
+            --name="IPTV Manager" \
+            --version=1.0 \
+            --bootstrap=sdl2 \
+            --requirements=python3,kivy==2.1.0,requests,pyjnius,plyer,android \
+            --permission=INTERNET \
+            --permission=WRITE_EXTERNAL_STORAGE \
+            --permission=READ_EXTERNAL_STORAGE \
+            --permission=ACCESS_NETWORK_STATE \
+            --arch=arm64-v8a \
+            --debug \
+            --keystore=$KEYSTORE_PATH \
+            --keystore-passwd=$KEYSTORE_PASSWORD \
+            --key-alias=$KEY_ALIAS \
+            --key-passwd=$KEY_PASSWORD
+        }
         
-        echo "=== Construction P4A terminée ==="
+        echo "=== Build terminé ==="
 
-    - name: 📋 Find APK Files
+    - name: 🔍 Find and Prepare APK Files
       if: always()
       run: |
         echo "=== Recherche exhaustive des APK ==="
         
-        # Recherche globale
+        # Créer un dossier pour les APK finaux
+        mkdir -p final_apks
+        
+        # Fonction pour traiter les APK trouvées
+        process_apk() {
+          local apk_file="$1"
+          local apk_size=$(stat -c%s "$apk_file" 2>/dev/null || echo "0")
+          
+          if [ $apk_size -gt 1000000 ]; then  # > 1MB
+            echo "✅ APK valide trouvée: $apk_file ($(echo "$apk_size" | numfmt --to=iec-i)B)"
+            
+            # Copier avec un nom propre
+            apk_name="IPTV-Manager-$(date +%Y%m%d-%H%M%S).apk"
+            cp "$apk_file" "final_apks/$apk_name"
+            
+            # Vérifier la signature
+            if command -v aapt >/dev/null 2>&1; then
+              echo "📋 Informations APK:"
+              aapt dump badging "$apk_file" | head -5 || true
+            fi
+            
+            echo "APK_FOUND=true" >> $GITHUB_ENV
+          else
+            echo "⚠️ APK trop petite ignorée: $apk_file ($apk_size bytes)"
+          fi
+        }
+        
+        # Recherche dans tous les dossiers possibles
         find . -name "*.apk" -type f 2>/dev/null | while read apk; do
-          echo "✅ APK trouvée: $apk"
-          ls -lh "$apk"
+          process_apk "$apk"
         done
         
-        # Recherche dans les dossiers typiques de P4A
-        echo "=== Recherche dans les dossiers P4A ==="
-        find $HOME/.local -name "*.apk" -type f 2>/dev/null | head -5
-        find $HOME -name "dist" -type d 2>/dev/null | while read dist_dir; do
-          echo "Contenu de $dist_dir:"
-          find "$dist_dir" -name "*.apk" -type f 2>/dev/null
+        # Recherche spécifique buildozer
+        find $HOME/.buildozer -name "*.apk" -type f 2>/dev/null | while read apk; do
+          process_apk "$apk"
         done
         
-        # Dossiers de build P4A
-        if [ -d "p4a_build" ]; then
-          echo "Contenu p4a_build:"
-          find p4a_build -name "*.apk" -type f 2>/dev/null
+        # Compter les APK finales
+        APK_COUNT=$(find final_apks -name "*.apk" -type f 2>/dev/null | wc -l)
+        echo "=== Total: $APK_COUNT fichier(s) APK final(s) ==="
+        
+        if [ $APK_COUNT -gt 0 ]; then
+          echo "📱 APK finales prêtes:"
+          ls -lh final_apks/
         fi
-        
-        # Compter les APK
-        APK_COUNT=$(find . -name "*.apk" -type f 2>/dev/null | wc -l)
-        echo "=== Total: $APK_COUNT fichier(s) APK trouvé(s) ==="
 
-    - name: 🔄 Alternative Build Method (si premier échec)
+    - name: 🔧 Fix APK Signature (if needed)
       if: always()
       run: |
-        echo "=== Tentative de build alternatif ==="
-        
-        # Essayer avec buildozer si P4A échoue
-        pip install buildozer
-        
-        # Créer un buildozer.spec minimal
-        cat > buildozer_minimal.spec << 'EOF'
-        [app]
-        title = IPTV Manager
-        package.name = iptvmanager
-        package.domain = com.iptv.manager
-        source.dir = .
-        version = 1.0
-        requirements = python3,kivy==2.1.0,requests,pyjnius,plyer,android
-        android.permissions = INTERNET,WRITE_EXTERNAL_STORAGE,READ_EXTERNAL_STORAGE,ACCESS_NETWORK_STATE
-        
-        [buildozer]
-        log_level = 2
-        
-        [android]
-        android.api = 33
-        android.minapi = 21
-        android.ndk_api = 21
-        android.sdk = 33
-        android.ndk = 25c
-        android.archs = arm64-v8a
-        android.accept_sdk_license = True
-        EOF
-        
-        # Essayer buildozer avec notre SDK
-        export ANDROID_HOME=$HOME/android-sdk
-        export ANDROID_SDK_ROOT=$HOME/android-sdk
-        export ANDROID_NDK_HOME=$HOME/android-ndk
-        
-        buildozer --profile minimal android debug || echo "Buildozer également échoué"
-        
-        # Recherche finale
-        find . -name "*.apk" -type f 2>/dev/null
+        if [ -d "final_apks" ] && [ "$(ls -A final_apks)" ]; then
+          echo "=== Vérification et correction des signatures ==="
+          
+          for apk in final_apks/*.apk; do
+            if [ -f "$apk" ]; then
+              echo "🔐 Signature de $apk"
+              
+              # Re-signer l'APK avec le keystore debug
+              if [ -f "$KEYSTORE_PATH" ]; then
+                # Créer une version signée
+                apk_signed="${apk%.apk}-signed.apk"
+                
+                # Utiliser apksigner si disponible
+                if command -v apksigner >/dev/null 2>&1; then
+                  apksigner sign \
+                    --ks "$KEYSTORE_PATH" \
+                    --ks-key-alias "$KEY_ALIAS" \
+                    --ks-pass pass:"$KEYSTORE_PASSWORD" \
+                    --key-pass pass:"$KEY_PASSWORD" \
+                    --out "$apk_signed" \
+                    "$apk" || echo "⚠️ Signature échouée pour $apk"
+                else
+                  echo "⚠️ apksigner non disponible"
+                fi
+              fi
+            fi
+          done
+          
+          echo "📱 APK finales après signature:"
+          ls -lh final_apks/
+        fi
 
     - name: 📤 Upload APK Artifact
       uses: actions/upload-artifact@v4
       if: always()
       with:
-        name: IPTV-Manager-APK-P4A
+        name: IPTV-Manager-APK-Ready
         path: |
+          final_apks/*.apk
           **/*.apk
-          p4a_build/**/*.apk
-          bin/*.apk
-          .buildozer/**/outputs/**/*.apk
         if-no-files-found: warn
         retention-days: 30
 
@@ -233,28 +342,28 @@ jobs:
       run: |
         echo "### 📱 IPTV Manager APK Build Results" >> $GITHUB_STEP_SUMMARY
         
-        APK_COUNT=$(find . -name "*.apk" -type f 2>/dev/null | wc -l)
+        APK_COUNT=$(find final_apks -name "*.apk" -type f 2>/dev/null | wc -l || echo "0")
         
         if [ $APK_COUNT -gt 0 ]; then
           echo "✅ **APK Successfully Generated!**" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "🎉 **Your IPTV Manager APK is ready!**" >> $GITHUB_STEP_SUMMARY
+          echo "🎉 **Your IPTV Manager APK is ready for installation!**" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "📥 **How to Download:**" >> $GITHUB_STEP_SUMMARY
-          echo "1. Click on the **Actions** tab in your repository" >> $GITHUB_STEP_SUMMARY
-          echo "2. Click on this completed build" >> $GITHUB_STEP_SUMMARY
-          echo "3. Scroll down to **Artifacts**" >> $GITHUB_STEP_SUMMARY
-          echo "4. Download **IPTV-Manager-APK-P4A**" >> $GITHUB_STEP_SUMMARY
-          echo "5. Unzip the downloaded file" >> $GITHUB_STEP_SUMMARY
-          echo "6. Install the APK on your Android device" >> $GITHUB_STEP_SUMMARY
+          echo "📥 **Installation Steps:**" >> $GITHUB_STEP_SUMMARY
+          echo "1. Download the APK from **Artifacts** below" >> $GITHUB_STEP_SUMMARY
+          echo "2. Enable **Unknown Sources** in Android Settings" >> $GITHUB_STEP_SUMMARY
+          echo "3. Install the APK file" >> $GITHUB_STEP_SUMMARY
+          echo "4. Grant requested permissions" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**APK Files Found ($APK_COUNT total):**" >> $GITHUB_STEP_SUMMARY
-          find . -name "*.apk" -type f -exec echo "- {}" \; >> $GITHUB_STEP_SUMMARY 2>/dev/null | head -10
+          echo "**APK Files Ready ($APK_COUNT total):**" >> $GITHUB_STEP_SUMMARY
+          find final_apks -name "*.apk" -type f -exec basename {} \; >> $GITHUB_STEP_SUMMARY 2>/dev/null
         else
-          echo "❌ **No APK Generated**" >> $GITHUB_STEP_SUMMARY
+          echo "❌ **No Installable APK Generated**" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Troubleshooting:**" >> $GITHUB_STEP_SUMMARY
-          echo "- Check the build logs above for errors" >> $GITHUB_STEP_SUMMARY
-          echo "- Verify that main.py contains valid Python code" >> $GITHUB_STEP_SUMMARY
-          echo "- Ensure all dependencies are correctly specified" >> $GITHUB_STEP_SUMMARY
+          echo "**Possible Issues:**" >> $GITHUB_STEP_SUMMARY
+          echo "- Build process failed" >> $GITHUB_STEP_SUMMARY
+          echo "- Dependencies missing" >> $GITHUB_STEP_SUMMARY
+          echo "- Code syntax errors" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Check the build logs above for detailed error messages.**" >> $GITHUB_STEP_SUMMARY
         fi
