@@ -1,0 +1,15 @@
+name: Test Build
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Hello
+      run: echo "Hello World - Build started!"
+    - name: Show files
+      run: ls -la
+    - name: Python version
+      run: python --version
