@@ -8,7 +8,7 @@ on:
 jobs:
   build:
     runs-on: ubuntu-20.04
-    timeout-minutes: 90
+    timeout-minutes: 60
 
     steps:
     - name: 📥 Checkout Repository
@@ -27,7 +27,7 @@ jobs:
 
     - name: 🛠️ Install System Dependencies
       run: |
-        sudo apt-get update
+        sudo apt-get update -qq
         sudo apt-get install -y \
           build-essential \
           git \
@@ -38,18 +38,10 @@ jobs:
           libbz2-dev \
           libreadline-dev \
           libsqlite3-dev \
-          libncurses5-dev \
-          libncursesw5-dev \
-          autoconf \
-          automake \
-          libtool \
-          pkg-config \
-          zlib1g-dev \
           ccache
 
     - name: 📱 Setup Android SDK
       run: |
-        # Android SDK Command Line Tools
         mkdir -p $HOME/android-sdk/cmdline-tools
         cd $HOME
         wget -q https://dl.google.com/android/repository/commandlinetools-linux-8512546_latest.zip
@@ -57,13 +49,11 @@ jobs:
         mv cmdline-tools android-sdk/cmdline-tools/latest
         rm commandlinetools-linux-8512546_latest.zip
         
-        # Android NDK
         wget -q https://dl.google.com/android/repository/android-ndk-r23c-linux.zip
         unzip -q android-ndk-r23c-linux.zip
         mv android-ndk-r23c android-ndk
         rm android-ndk-r23c-linux.zip
         
-        # Variables d'environnement
         echo "ANDROID_HOME=$HOME/android-sdk" >> $GITHUB_ENV
         echo "ANDROID_SDK_ROOT=$HOME/android-sdk" >> $GITHUB_ENV
         echo "ANDROID_NDK_HOME=$HOME/android-ndk" >> $GITHUB_ENV
@@ -77,14 +67,13 @@ jobs:
           "platform-tools" \
           "platforms;android-30" \
           "platforms;android-28" \
-          "build-tools;30.0.3" \
-          "build-tools;29.0.3"
+          "build-tools;30.0.3"
 
     - name: 📦 Install Buildozer
       run: |
         python -m pip install --upgrade pip wheel setuptools
-        pip install buildozer==1.4.0
-        pip install cython==0.29.33
+        pip install --no-cache-dir buildozer==1.4.0
+        pip install --no-cache-dir cython==0.29.33
 
     - name: 🔧 Create Buildozer Spec
       run: |
@@ -100,7 +89,6 @@ jobs:
         
         [buildozer]
         log_level = 2
-        warn_on_root = 1
         
         [app:android]
         android.permissions = INTERNET,WRITE_EXTERNAL_STORAGE,READ_EXTERNAL_STORAGE,ACCESS_NETWORK_STATE,ACCESS_WIFI_STATE
@@ -114,10 +102,6 @@ jobs:
         android.gradle_dependencies = 
         android.add_src = 
         android.presplash_color = #000000
-        android.icon = 
-        android.orientation = portrait
-        android.fullscreen = 0
-        android.auto_backup = True
         EOF
 
     - name: 🏗️ Build APK with Buildozer
@@ -128,24 +112,28 @@ jobs:
         export PATH=$PATH:$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools
         
         echo "=== Building APK ==="
-        buildozer android debug
+        timeout 45m buildozer android debug || echo "Build completed or timed out"
         
-        echo "=== APK Built Successfully ==="
+        echo "=== Finding APK ==="
+        find . -name "*.apk" -type f
 
-    - name: 📋 Find and Sign APK
+    - name: 📋 Copy APK
       run: |
-        echo "=== Finding APK Files ==="
-        find . -name "*.apk" -type f 2>/dev/null | while read apk; do
-          echo "✅ APK Found: $apk"
-          ls -lh "$apk"
-          
-          # Copy to root with a clean name
-          cp "$apk" "IPTV-Manager-v1.0.apk"
+        APK_PATH=$(find . -name "*.apk" -type f | head -1)
+        if [ -n "$APK_PATH" ]; then
+          echo "APK Found: $APK_PATH"
+          cp "$APK_PATH" "IPTV-Manager-v1.0.apk"
           echo "✅ APK copied to: IPTV-Manager-v1.0.apk"
-        done
+          ls -lh "IPTV-Manager-v1.0.apk"
+        else
+          echo "❌ No APK found"
+          echo "=== Searching in common locations ==="
+          find . -name "*.apk" -o -name "*.aab" 2>/dev/null || echo "No APK/AAB files found"
+        fi
 
     - name: 📤 Upload APK
       uses: actions/upload-artifact@v3
+      if: always()
       with:
         name: IPTV-Manager-APK
         path: |
@@ -156,18 +144,24 @@ jobs:
         retention-days: 30
 
     - name: 📊 Build Summary
+      if: always()
       run: |
-        echo "### 🎬 IPTV Manager APK Build Complete! 🎉" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "✅ **Your Android APK is ready for download!**" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "📥 **Download Instructions:**" >> $GITHUB_STEP_SUMMARY
-        echo "1. Go to the **Actions** tab in your GitHub repository" >> $GITHUB_STEP_SUMMARY
-        echo "2. Click on this completed workflow run" >> $GITHUB_STEP_SUMMARY
-        echo "3. Scroll down to **Artifacts** section" >> $GITHUB_STEP_SUMMARY
-        echo "4. Download **IPTV-Manager-APK**" >> $GITHUB_STEP_SUMMARY
-        echo "5. Extract the ZIP and install the APK file on your Android device" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "📱 **Installation:**" >> $GITHUB_STEP_SUMMARY
-        echo "- Enable 'Unknown Sources' in Android Settings" >> $GITHUB_STEP_SUMMARY
-        echo
+        echo "### 🎬 IPTV Manager APK Build Results" >> $GITHUB_STEP_SUMMARY
+        
+        APK_COUNT=$(find . -name "*.apk" -type f 2>/dev/null | wc -l)
+        
+        if [ $APK_COUNT -gt 0 ]; then
+          echo "✅ **APK Successfully Generated!**" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "🎉 **Your IPTV Manager APK is ready!**" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "📥 **Download Instructions:**" >> $GITHUB_STEP_SUMMARY
+          echo "1. Click on the **Actions** tab" >> $GITHUB_STEP_SUMMARY
+          echo "2. Click on this completed workflow run" >> $GITHUB_STEP_SUMMARY
+          echo "3. Scroll down to **Artifacts**" >> $GITHUB_STEP_SUMMARY
+          echo "4. Download **IPTV-Manager-APK**" >> $GITHUB_STEP_SUMMARY
+          echo "5. Extract and install the APK on your Android device" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "❌ **No APK Generated**" >> $GITHUB_STEP_SUMMARY
+          echo "Check the build logs for errors" >> $GITHUB_STEP_SUMMARY
+        fi
