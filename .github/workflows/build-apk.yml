@@ -1,4 +1,4 @@
-name: Build IPTV Manager APK
+name: Build IPTV Manager APK2
 
 on:
   push:
