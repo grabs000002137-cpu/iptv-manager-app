@@ -2,4 +2,3 @@ kivy==2.1.0
 requests>=2.25.0
 pyjnius>=1.4.0
 plyer>=2.0.0
-android>=0.1.0
