@@ -1,0 +1,173 @@
+name: Build IPTV Manager APK
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-20.04
+    timeout-minutes: 90
+
+    steps:
+    - name: 📥 Checkout Repository
+      uses: actions/checkout@v3
+
+    - name: 🐍 Setup Python 3.9
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+
+    - name: ☕ Setup Java JDK 11
+      uses: actions/setup-java@v3
+      with:
+        distribution: 'temurin'
+        java-version: '11'
+
+    - name: 🛠️ Install System Dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          build-essential \
+          git \
+          zip \
+          unzip \
+          libssl-dev \
+          libffi-dev \
+          libbz2-dev \
+          libreadline-dev \
+          libsqlite3-dev \
+          libncurses5-dev \
+          libncursesw5-dev \
+          autoconf \
+          automake \
+          libtool \
+          pkg-config \
+          zlib1g-dev \
+          ccache
+
+    - name: 📱 Setup Android SDK
+      run: |
+        # Android SDK Command Line Tools
+        mkdir -p $HOME/android-sdk/cmdline-tools
+        cd $HOME
+        wget -q https://dl.google.com/android/repository/commandlinetools-linux-8512546_latest.zip
+        unzip -q commandlinetools-linux-8512546_latest.zip
+        mv cmdline-tools android-sdk/cmdline-tools/latest
+        rm commandlinetools-linux-8512546_latest.zip
+        
+        # Android NDK
+        wget -q https://dl.google.com/android/repository/android-ndk-r23c-linux.zip
+        unzip -q android-ndk-r23c-linux.zip
+        mv android-ndk-r23c android-ndk
+        rm android-ndk-r23c-linux.zip
+        
+        # Variables d'environnement
+        echo "ANDROID_HOME=$HOME/android-sdk" >> $GITHUB_ENV
+        echo "ANDROID_SDK_ROOT=$HOME/android-sdk" >> $GITHUB_ENV
+        echo "ANDROID_NDK_HOME=$HOME/android-ndk" >> $GITHUB_ENV
+        echo "NDK_API=21" >> $GITHUB_ENV
+        echo "PATH=$PATH:$HOME/android-sdk/cmdline-tools/latest/bin:$HOME/android-sdk/platform-tools" >> $GITHUB_ENV
+
+    - name: 🔧 Install Android SDK Components
+      run: |
+        yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses
+        $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager \
+          "platform-tools" \
+          "platforms;android-30" \
+          "platforms;android-28" \
+          "build-tools;30.0.3" \
+          "build-tools;29.0.3"
+
+    - name: 📦 Install Buildozer
+      run: |
+        python -m pip install --upgrade pip wheel setuptools
+        pip install buildozer==1.4.0
+        pip install cython==0.29.33
+
+    - name: 🔧 Create Buildozer Spec
+      run: |
+        cat > buildozer.spec << 'EOF'
+        [app]
+        title = IPTV Manager
+        package.name = iptvmanager
+        package.domain = com.iptv.manager
+        source.dir = .
+        source.include_exts = py,png,jpg,kv,atlas,json,txt
+        version = 1.0
+        requirements = python3,kivy==2.1.0,requests,pyjnius,plyer,android
+        
+        [buildozer]
+        log_level = 2
+        warn_on_root = 1
+        
+        [app:android]
+        android.permissions = INTERNET,WRITE_EXTERNAL_STORAGE,READ_EXTERNAL_STORAGE,ACCESS_NETWORK_STATE,ACCESS_WIFI_STATE
+        android.api = 30
+        android.minapi = 21
+        android.ndk_api = 21
+        android.sdk = 30
+        android.ndk = 23c
+        android.accept_sdk_license = True
+        android.arch = arm64-v8a
+        android.gradle_dependencies = 
+        android.add_src = 
+        android.presplash_color = #000000
+        android.icon = 
+        android.orientation = portrait
+        android.fullscreen = 0
+        android.auto_backup = True
+        EOF
+
+    - name: 🏗️ Build APK with Buildozer
+      run: |
+        export ANDROID_HOME=$HOME/android-sdk
+        export ANDROID_SDK_ROOT=$HOME/android-sdk
+        export ANDROID_NDK_HOME=$HOME/android-ndk
+        export PATH=$PATH:$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools
+        
+        echo "=== Building APK ==="
+        buildozer android debug
+        
+        echo "=== APK Built Successfully ==="
+
+    - name: 📋 Find and Sign APK
+      run: |
+        echo "=== Finding APK Files ==="
+        find . -name "*.apk" -type f 2>/dev/null | while read apk; do
+          echo "✅ APK Found: $apk"
+          ls -lh "$apk"
+          
+          # Copy to root with a clean name
+          cp "$apk" "IPTV-Manager-v1.0.apk"
+          echo "✅ APK copied to: IPTV-Manager-v1.0.apk"
+        done
+
+    - name: 📤 Upload APK
+      uses: actions/upload-artifact@v3
+      with:
+        name: IPTV-Manager-APK
+        path: |
+          *.apk
+          bin/*.apk
+          .buildozer/android/platform/build-**/outputs/**/*.apk
+        if-no-files-found: warn
+        retention-days: 30
+
+    - name: 📊 Build Summary
+      run: |
+        echo "### 🎬 IPTV Manager APK Build Complete! 🎉" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "✅ **Your Android APK is ready for download!**" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "📥 **Download Instructions:**" >> $GITHUB_STEP_SUMMARY
+        echo "1. Go to the **Actions** tab in your GitHub repository" >> $GITHUB_STEP_SUMMARY
+        echo "2. Click on this completed workflow run" >> $GITHUB_STEP_SUMMARY
+        echo "3. Scroll down to **Artifacts** section" >> $GITHUB_STEP_SUMMARY
+        echo "4. Download **IPTV-Manager-APK**" >> $GITHUB_STEP_SUMMARY
+        echo "5. Extract the ZIP and install the APK file on your Android device" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "📱 **Installation:**" >> $GITHUB_STEP_SUMMARY
+        echo "- Enable 'Unknown Sources' in Android Settings" >> $GITHUB_STEP_SUMMARY
+        echo
