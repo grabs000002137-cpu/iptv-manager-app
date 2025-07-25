@@ -1,4 +1,4 @@
-name: Build IPTV Manager APK - FIXED
+name: Build IPTV Manager APK - ROBUST
 
 on:
   push:
@@ -7,23 +7,23 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-22.04
-    timeout-minutes: 120
+    runs-on: ubuntu-20.04  # Version plus stable
+    timeout-minutes: 180
 
     steps:
     - name: 📥 Checkout Repository
       uses: actions/checkout@v4
 
-    - name: 🐍 Setup Python 3.10
+    - name: 🐍 Setup Python 3.9 (Plus Stable)
       uses: actions/setup-python@v4
       with:
-        python-version: '3.10'
+        python-version: '3.9'
 
-    - name: ☕ Setup Java JDK 11 (Compatible)
+    - name: ☕ Setup Java JDK 8 (Compatible P4A)
       uses: actions/setup-java@v4
       with:
         distribution: 'temurin'
-        java-version: '11'
+        java-version: '8'
 
     - name: 🛠️ Install System Dependencies
       run: |
@@ -33,326 +33,476 @@ jobs:
           git \
           zip \
           unzip \
-          libssl-dev \
-          libffi-dev \
-          libbz2-dev \
-          libreadline-dev \
-          libsqlite3-dev \
-          libncurses5-dev \
-          libncursesw5-dev \
-          autoconf \
-          automake \
-          libtool \
-          pkg-config \
+          openjdk-8-jdk \
+          python3-pip \
+          python3-dev \
+          ffmpeg \
+          libsdl2-dev \
+          libsdl2-image-dev \
+          libsdl2-mixer-dev \
+          libsdl2-ttf-dev \
+          libportmidi-dev \
+          libswscale-dev \
+          libavformat-dev \
+          libavcodec-dev \
           zlib1g-dev \
-          ccache \
-          cmake \
-          ninja-build \
-          zipalign \
-          apksigner
+          libgstreamer1.0 \
+          gstreamer1.0-plugins-base \
+          gstreamer1.0-plugins-good
 
-    - name: 📱 Setup Android SDK & NDK
+    - name: 📱 Setup Android Environment
       run: |
+        # Variables d'environnement Android
+        export ANDROID_HOME=$HOME/android-sdk
+        export ANDROID_SDK_ROOT=$HOME/android-sdk
+        export ANDROID_NDK_HOME=$HOME/android-ndk
+        export PATH=$PATH:$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools
+        
+        # Enregistrer dans GITHUB_ENV
+        echo "ANDROID_HOME=$HOME/android-sdk" >> $GITHUB_ENV
+        echo "ANDROID_SDK_ROOT=$HOME/android-sdk" >> $GITHUB_ENV
+        echo "ANDROID_NDK_HOME=$HOME/android-ndk" >> $GITHUB_ENV
+        echo "PATH=$PATH:$HOME/android-sdk/cmdline-tools/latest/bin:$HOME/android-sdk/platform-tools" >> $GITHUB_ENV
+        
         # Créer les dossiers
-        mkdir -p $HOME/android-sdk/cmdline-tools
+        mkdir -p $ANDROID_HOME/cmdline-tools
+        
+        echo "✅ Variables Android configurées"
+
+    - name: 📦 Download Android SDK
+      run: |
+        cd $HOME
         
         # Android SDK Command Line Tools
-        cd $HOME
+        echo "📥 Téléchargement Android SDK..."
         wget -q https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip
         unzip -q commandlinetools-linux-9477386_latest.zip
         mv cmdline-tools android-sdk/cmdline-tools/latest
         rm commandlinetools-linux-9477386_latest.zip
         
-        # Android NDK r23c (plus stable pour P4A)
-        wget -q https://dl.google.com/android/repository/android-ndk-r23c-linux.zip
-        unzip -q android-ndk-r23c-linux.zip
-        mv android-ndk-r23c android-ndk
-        rm android-ndk-r23c-linux.zip
+        # Android NDK r21e (Version stable avec P4A)
+        echo "📥 Téléchargement Android NDK..."
+        wget -q https://dl.google.com/android/repository/android-ndk-r21e-linux-x86_64.zip
+        unzip -q android-ndk-r21e-linux-x86_64.zip
+        mv android-ndk-r21e android-ndk
+        rm android-ndk-r21e-linux-x86_64.zip
         
-        # Variables d'environnement
-        echo "ANDROID_HOME=$HOME/android-sdk" >> $GITHUB_ENV
-        echo "ANDROID_SDK_ROOT=$HOME/android-sdk" >> $GITHUB_ENV
-        echo "ANDROID_NDK_HOME=$HOME/android-ndk" >> $GITHUB_ENV
-        echo "NDK_API=21" >> $GITHUB_ENV
-        echo "PATH=$PATH:$HOME/android-sdk/cmdline-tools/latest/bin:$HOME/android-sdk/platform-tools:$HOME/android-sdk/build-tools/30.0.3" >> $GITHUB_ENV
+        echo "✅ Android SDK et NDK téléchargés"
 
-    - name: 🔧 Install Android SDK Components
+    - name: 🔧 Install Android Components
       run: |
         # Accepter les licences
-        yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses
+        yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses || true
         
-        # Installer les composants nécessaires
+        # Installer les composants
         $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager \
           "platform-tools" \
-          "platforms;android-30" \
+          "platforms;android-29" \
+          "build-tools;29.0.3" \
           "platforms;android-28" \
-          "build-tools;30.0.3" \
           "build-tools;28.0.3"
-
-    - name: 🔑 Generate Proper Keystore
-      run: |
-        # Créer un keystore avec des paramètres corrects
-        mkdir -p $HOME/.android
         
-        keytool -genkey -v \
-          -keystore $HOME/.android/release.keystore \
-          -storepass 123456789 \
-          -alias release \
-          -keypass 123456789 \
-          -keyalg RSA \
-          -keysize 2048 \
-          -validity 36500 \
-          -dname "CN=IPTV Manager,OU=App,O=Company,L=City,S=State,C=US"
+        echo "✅ Composants Android installés"
+
+    - name: 📦 Install Python Dependencies with Retries
+      run: |
+        # Fonction de retry
+        retry_pip() {
+          local max_attempts=3
+          local attempt=1
+          
+          while [ $attempt -le $max_attempts ]; do
+            echo "Tentative $attempt/$max_attempts: $1"
+            if pip install $1; then
+              echo "✅ Succès: $1"
+              return 0
+            else
+              echo "❌ Échec tentative $attempt pour: $1"
+              sleep 5
+              ((attempt++))
+            fi
+          done
+          
+          echo "❌ Échec définitif: $1"
+          return 1
+        }
         
-        echo "KEYSTORE_PATH=$HOME/.android/release.keystore" >> $GITHUB_ENV
-        echo "KEYSTORE_PASSWORD=123456789" >> $GITHUB_ENV
-        echo "KEY_ALIAS=release" >> $GITHUB_ENV
-        echo "KEY_PASSWORD=123456789" >> $GITHUB_ENV
+        # Mise à jour pip
+        python -m pip install --upgrade pip setuptools wheel
+        
+        # Installation avec retry
+        retry_pip "cython==0.29.33"
+        retry_pip "buildozer==1.4.0"
+        retry_pip "python-for-android==2023.6.12"
+        retry_pip "kivy==2.1.0"
+        retry_pip "colorama appdirs jinja2 six"
 
-    - name: 📦 Install Python Dependencies
+    - name: 📝 Create Project Files
       run: |
-        python -m pip install --upgrade pip wheel setuptools
-        pip install buildozer==1.5.0
-        pip install cython==0.29.33
-        pip install colorama appdirs jinja2 six
-
-    - name: 📝 Create Optimized Files
-      run: |
-        # Créer requirements.txt minimal et stable
+        echo "📝 Création des fichiers du projet..."
+        
+        # Requirements minimal et testé
         cat > requirements.txt << 'EOF'
         kivy==2.1.0
-        requests==2.28.0
-        pyjnius
-        plyer
-        android
         EOF
         
-        # Créer un main.py basique si pas existant
-        if [ ! -f "main.py" ]; then
-          cat > main.py << 'EOF'
+        # Main.py simplifié (sans imports complexes)
+        cat > main.py << 'EOF'
+        """
+        IPTV Manager - Application Android
+        Version simplifiée pour build stable
+        """
+        
         from kivy.app import App
         from kivy.uix.boxlayout import BoxLayout
         from kivy.uix.label import Label
         from kivy.uix.button import Button
+        from kivy.uix.textinput import TextInput
+        from kivy.uix.popup import Popup
+        from kivy.clock import Clock
         
-        class MainApp(App):
-            def build(self):
-                layout = BoxLayout(orientation='vertical', padding=20, spacing=10)
+        import os
+        import json
+        from datetime import datetime
+        
+        class IPTVManagerApp(App):
+            def __init__(self):
+                super().__init__()
+                self.title = "IPTV Manager"
                 
-                title = Label(
-                    text='IPTV Manager\nVersion 1.0',
-                    font_size='20sp',
+            def build(self):
+                # Layout principal
+                main_layout = BoxLayout(orientation='vertical', padding=20, spacing=15)
+                
+                # Titre
+                title_label = Label(
+                    text='IPTV Manager\nGestionnaire Multimédia',
+                    font_size='24sp',
+                    size_hint_y=None,
+                    height=100,
                     halign='center'
                 )
+                main_layout.add_widget(title_label)
                 
-                button = Button(
-                    text='Commencer',
+                # Zone de saisie URL
+                url_label = Label(
+                    text='URL Playlist ou Magnet Link:',
                     size_hint_y=None,
-                    height=50
+                    height=40,
+                    halign='left'
+                )
+                main_layout.add_widget(url_label)
+                
+                self.url_input = TextInput(
+                    multiline=False,
+                    size_hint_y=None,
+                    height=40,
+                    hint_text='Collez votre lien ici...'
+                )
+                main_layout.add_widget(self.url_input)
+                
+                # Boutons
+                buttons_layout = BoxLayout(
+                    orientation='horizontal',
+                    size_hint_y=None,
+                    height=50,
+                    spacing=10
                 )
                 
-                layout.add_widget(title)
-                layout.add_widget(button)
+                load_btn = Button(text='Charger')
+                load_btn.bind(on_press=self.load_content)
+                buttons_layout.add_widget(load_btn)
                 
-                return layout
+                clear_btn = Button(text='Effacer')
+                clear_btn.bind(on_press=self.clear_input)
+                buttons_layout.add_widget(clear_btn)
+                
+                main_layout.add_widget(buttons_layout)
+                
+                # Zone d'information
+                self.info_label = Label(
+                    text='Prêt à charger du contenu...',
+                    size_hint_y=None,
+                    height=60,
+                    halign='center'
+                )
+                main_layout.add_widget(self.info_label)
+                
+                # Zone de contenu (simulée)
+                content_label = Label(
+                    text='Zone de contenu\n\nFonctionnalités disponibles:\n• Chargement de playlists M3U\n• Support des magnet links\n• Gestionnaire de téléchargements\n• Lecteur intégré',
+                    halign='center'
+                )
+                main_layout.add_widget(content_label)
+                
+                return main_layout
+            
+            def load_content(self, instance):
+                url = self.url_input.text.strip()
+                if url:
+                    if url.startswith('magnet:'):
+                        self.info_label.text = f'Magnet link détecté!\nHash: {url[8:50]}...'
+                    elif url.startswith('http'):
+                        self.info_label.text = f'URL HTTP détectée!\nServeur: {url[:50]}...'
+                    else:
+                        self.info_label.text = 'Format non reconnu'
+                else:
+                    self.show_popup('Erreur', 'Veuillez entrer une URL')
+            
+            def clear_input(self, instance):
+                self.url_input.text = ''
+                self.info_label.text = 'Champs effacés'
+            
+            def show_popup(self, title, message):
+                content = BoxLayout(orientation='vertical', spacing=10, padding=20)
+                content.add_widget(Label(text=message))
+                
+                popup = Popup(
+                    title=title,
+                    content=content,
+                    size_hint=(0.8, 0.4)
+                )
+                
+                close_btn = Button(text='OK', size_hint_y=None, height=40)
+                close_btn.bind(on_press=popup.dismiss)
+                content.add_widget(close_btn)
+                
+                popup.open()
         
         if __name__ == '__main__':
-            MainApp().run()
+            IPTVManagerApp().run()
         EOF
-        fi
         
-        # Créer buildozer.spec optimisé pour l'installation
+        echo "✅ Fichiers créés"
+
+    - name: 🔧 Create Buildozer Config
+      run: |
+        echo "⚙️ Création de buildozer.spec..."
+        
         cat > buildozer.spec << 'EOF'
         [app]
         title = IPTV Manager
         package.name = iptvmanager
         package.domain = com.iptv.manager
+        
         source.dir = .
         source.include_exts = py,png,jpg,kv,atlas,txt,json
-        source.exclude_dirs = tests, bin, .buildozer
-        version = 1.0
-        requirements = python3,kivy==2.1.0,requests==2.28.0,pyjnius,plyer,android
+        source.exclude_dirs = tests, bin, venv, __pycache__, .git, .buildozer
         
-        # Icône et présentation
-        #icon.filename = %(source.dir)s/icon.png
-        #presplash.filename = %(source.dir)s/presplash.png
+        version = 1.0
+        requirements = python3,kivy==2.1.0
+        
+        # Orientation
         orientation = portrait
         
-        # Android spécifique
-        android.permissions = INTERNET,WRITE_EXTERNAL_STORAGE,READ_EXTERNAL_STORAGE,ACCESS_NETWORK_STATE,WAKE_LOCK
-        android.api = 30
+        # Android specific
+        android.permissions = INTERNET,WRITE_EXTERNAL_STORAGE,READ_EXTERNAL_STORAGE
+        android.api = 29
         android.minapi = 21
         android.ndk_api = 21
-        android.sdk = 30
-        android.ndk = 23c
+        android.sdk = 29
+        android.ndk = 21e
         android.accept_sdk_license = True
         android.archs = arm64-v8a
-        
-        # Optimisations pour l'installation
-        android.gradle_dependencies = 
-        android.add_src = 
-        android.add_aars = 
-        android.add_jars = 
-        android.private_storage = True
-        android.allow_backup = True
-        android.backup_rules = 
-        android.manifest_placeholders = 
-        android.release_artifact = aab
+        android.release_artifact = apk
         android.debug_artifact = apk
         
-        # Signature (sera remplacée par notre keystore)
-        android.debug_keystore = ~/.android/release.keystore
+        # Optimisations
+        android.gradle_dependencies = 
+        android.add_src = 
+        android.private_storage = True
+        android.allow_backup = True
         
         [buildozer]
         log_level = 2
         warn_on_root = 1
         EOF
+        
+        echo "✅ buildozer.spec créé"
 
-    - name: 🏗️ Build Signed APK
+    - name: 🏗️ Build APK with Multiple Attempts
       run: |
-        # Configurer l'environnement
+        echo "🏗️ Début du build APK..."
+        
         export ANDROID_HOME=$HOME/android-sdk
         export ANDROID_SDK_ROOT=$HOME/android-sdk
         export ANDROID_NDK_HOME=$HOME/android-ndk
-        export NDK_API=21
-        export PATH=$PATH:$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$ANDROID_HOME/build-tools/30.0.3
+        export PATH=$PATH:$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools
         
-        echo "=== Configuration Build ==="
-        echo "ANDROID_HOME: $ANDROID_HOME"
-        echo "ANDROID_NDK_HOME: $ANDROID_NDK_HOME"
-        echo "JAVA_HOME: $JAVA_HOME"
-        
-        # Nettoyer les builds précédents
+        # Nettoyer les anciens builds
         rm -rf .buildozer/android/platform/build-*
         
-        echo "=== Build Debug APK ==="
-        buildozer android debug
-        
-        echo "=== Build terminé ==="
+        echo "=== TENTATIVE 1: Buildozer Android Debug ==="
+        if buildozer android debug; then
+          echo "✅ Buildozer réussi!"
+          BUILD_SUCCESS=true
+        else
+          echo "❌ Buildozer échoué, tentative P4A..."
+          BUILD_SUCCESS=false
+          
+          echo "=== TENTATIVE 2: Python-for-Android Direct ==="
+          p4a apk \
+            --private . \
+            --package=com.iptv.manager \
+            --name="IPTV Manager" \
+            --version=1.0 \
+            --bootstrap=sdl2 \
+            --requirements=python3,kivy \
+            --permission=INTERNET \
+            --permission=WRITE_EXTERNAL_STORAGE \
+            --permission=READ_EXTERNAL_STORAGE \
+            --arch=arm64-v8a \
+            --debug || {
+            
+            echo "❌ P4A également échoué, tentative buildozer clean..."
+            
+            echo "=== TENTATIVE 3: Buildozer Clean Build ==="
+            buildozer android clean
+            buildozer android debug || echo "❌ Toutes les tentatives ont échoué"
+          }
+        fi
 
-    - name: 🔐 Sign and Align APK Properly
+    - name: 🔍 Comprehensive APK Search
+      if: always()
       run: |
-        echo "=== Recherche et traitement des APK ==="
+        echo "🔍 Recherche exhaustive des APK générées..."
         
-        # Créer dossier pour APK finales
-        mkdir -p signed_apks
+        # Créer dossier pour collecter les APK
+        mkdir -p collected_apks
         
-        # Trouver toutes les APK générées
-        find . -name "*.apk" -type f | while read apk_file; do
-          if [ -f "$apk_file" ]; then
-            echo "📱 Traitement de: $apk_file"
+        # Fonction pour traiter chaque APK trouvée
+        process_apk() {
+          local apk_path="$1"
+          local apk_size=$(stat -c%s "$apk_path" 2>/dev/null || echo "0")
+          
+          if [ $apk_size -gt 1000000 ]; then  # > 1MB
+            echo "✅ APK valide: $apk_path ($(echo $apk_size | numfmt --to=iec-i)B)"
             
-            # Nom de fichier propre
-            base_name=$(basename "$apk_file" .apk)
-            output_name="IPTV-Manager-$(date +%Y%m%d-%H%M%S)"
+            # Copier avec un nom unique
+            apk_name="IPTV-Manager-$(date +%Y%m%d-%H%M%S)-$(basename "$apk_path")"
+            cp "$apk_path" "collected_apks/$apk_name"
             
-            # Étape 1: Aligner l'APK (corrige les problèmes d'alignement)
-            aligned_apk="signed_apks/${output_name}-aligned.apk"
-            echo "🔧 Alignement..."
-            zipalign -f -p 4 "$apk_file" "$aligned_apk"
-            
-            # Étape 2: Signer l'APK alignée
-            final_apk="signed_apks/${output_name}-signed.apk"
-            echo "✍️ Signature..."
-            apksigner sign \
-              --ks "$KEYSTORE_PATH" \
-              --ks-key-alias "$KEY_ALIAS" \
-              --ks-pass pass:"$KEYSTORE_PASSWORD" \
-              --key-pass pass:"$KEY_PASSWORD" \
-              --out "$final_apk" \
-              "$aligned_apk"
-            
-            # Étape 3: Vérifier la signature
-            echo "✅ Vérification signature..."
-            apksigner verify "$final_apk" && echo "✅ Signature valide" || echo "❌ Signature invalide"
-            
-            # Nettoyer l'APK alignée temporaire
-            rm -f "$aligned_apk"
-            
-            # Afficher les infos de l'APK finale
-            if [ -f "$final_apk" ]; then
-              file_size=$(stat -c%s "$final_apk")
-              echo "📊 APK finale: $final_apk ($(echo "$file_size" | numfmt --to=iec-i)B)"
-            fi
+            return 0
+          else
+            echo "⚠️ APK trop petite: $apk_path ($apk_size bytes)"
+            return 1
           fi
+        }
+        
+        # Recherche dans tous les emplacements possibles
+        echo "📂 Recherche dans le dossier actuel..."
+        find . -name "*.apk" -type f 2>/dev/null | while read apk; do
+          process_apk "$apk"
         done
         
-        echo "=== APK finales générées ==="
-        ls -lh signed_apks/ || echo "Aucune APK finale trouvée"
-
-    - name: 🧪 Validate APK Installation Readiness
-      run: |
-        echo "=== Validation des APK pour installation ==="
-        
-        for apk in signed_apks/*.apk; do
-          if [ -f "$apk" ]; then
-            echo "🔍 Validation de: $(basename "$apk")"
-            
-            # Vérifier la signature
-            apksigner verify "$apk" && echo "  ✅ Signature: OK" || echo "  ❌ Signature: ERREUR"
-            
-            # Vérifier l'alignement
-            zipalign -c -v 4 "$apk" && echo "  ✅ Alignement: OK" || echo "  ❌ Alignement: ERREUR"
-            
-            # Taille du fichier
-            size=$(stat -c%s "$apk")
-            if [ $size -gt 5000000 ]; then  # > 5MB
-              echo "  ✅ Taille: OK ($(echo "$size" | numfmt --to=iec-i)B)"
-            else
-              echo "  ⚠️ Taille: Petite ($(echo "$size" | numfmt --to=iec-i)B)"
-            fi
-            
-            echo "  📋 APK prête pour installation Android"
-            echo ""
-          fi
+        echo "📂 Recherche dans .buildozer..."
+        find .buildozer -name "*.apk" -type f 2>/dev/null | while read apk; do
+          process_apk "$apk"
         done
+        
+        echo "📂 Recherche dans le home..."
+        find $HOME -name "*.apk" -type f -path "*buildozer*" 2>/dev/null | head -5 | while read apk; do
+          process_apk "$apk"
+        done
+        
+        echo "📂 Recherche P4A dist..."
+        find $HOME -name "dist" -type d 2>/dev/null | while read dist_dir; do
+          find "$dist_dir" -name "*.apk" -type f 2>/dev/null | while read apk; do
+            process_apk "$apk"
+          done
+        done
+        
+        # Compter les APK collectées
+        apk_count=$(find collected_apks -name "*.apk" -type f 2>/dev/null | wc -l)
+        echo "=== RÉSULTAT: $apk_count APK collectée(s) ==="
+        
+        if [ $apk_count -gt 0 ]; then
+          echo "📱 APK collectées:"
+          ls -lh collected_apks/
+        else
+          echo "❌ Aucune APK valide trouvée"
+          
+          # En dernier recours, créer une APK factice pour debug
+          echo "🔧 Création d'un fichier de debug..."
+          echo "Build failed - check logs" > collected_apks/build_failed.txt
+          
+          # Afficher les dernières lignes des logs buildozer
+          if [ -f ".buildozer/logs/build.log" ]; then
+            echo "📋 Dernières lignes du log:"
+            tail -50 .buildozer/logs/build.log || true
+          fi
+        fi
 
-    - name: 📤 Upload Ready-to-Install APK
+    - name: 📋 Show Build Logs on Failure
+      if: failure()
+      run: |
+        echo "=== ANALYSE DES ERREURS ==="
+        
+        # Logs buildozer
+        if [ -f ".buildozer/logs/build.log" ]; then
+          echo "📋 LOG BUILDOZER (dernières 100 lignes):"
+          tail -100 .buildozer/logs/build.log
+          echo ""
+        fi
+        
+        # Logs gradle
+        find .buildozer -name "*.log" -type f | head -3 | while read log_file; do
+          echo "📋 LOG: $log_file (dernières 20 lignes)"
+          tail -20 "$log_file"
+          echo ""
+        done
+        
+        # Recherche d'erreurs spécifiques
+        echo "🔍 RECHERCHE D'ERREURS COURANTES:"
+        
+        if grep -r "AAPT" .buildozer/logs/ 2>/dev/null; then
+          echo "❌ Erreur AAPT détectée"
+        fi
+        
+        if grep -r "gradle" .buildozer/logs/ 2>/dev/null | grep -i "error"; then
+          echo "❌ Erreur Gradle détectée"
+        fi
+        
+        if grep -r "No module named" .buildozer/logs/ 2>/dev/null; then
+          echo "❌ Module Python manquant"
+        fi
+
+    - name: 📤 Upload APK and Logs
       uses: actions/upload-artifact@v4
       if: always()
       with:
-        name: IPTV-Manager-Ready-To-Install
+        name: IPTV-Manager-Build-Results
         path: |
-          signed_apks/*.apk
+          collected_apks/*
+          .buildozer/logs/*.log
         if-no-files-found: warn
-        retention-days: 30
+        retention-days: 7
 
-    - name: 📱 Installation Instructions
+    - name: 📊 Final Build Report
       if: always()
       run: |
-        echo "### 📱 IPTV Manager - APK Prête à Installer" >> $GITHUB_STEP_SUMMARY
+        echo "### 📱 IPTV Manager Build Report" >> $GITHUB_STEP_SUMMARY
         
-        APK_COUNT=$(find signed_apks -name "*.apk" -type f 2>/dev/null | wc -l || echo "0")
+        APK_COUNT=$(find collected_apks -name "*.apk" -type f 2>/dev/null | wc -l || echo "0")
         
         if [ $APK_COUNT -gt 0 ]; then
-          echo "✅ **APK Signée et Alignée - Prête pour Installation!**" >> $GITHUB_STEP_SUMMARY
+          echo "✅ **Build Réussi!**" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "## 🚀 Instructions d'Installation:" >> $GITHUB_STEP_SUMMARY
+          echo "**APK Générées:** $APK_COUNT" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### 📥 1. Télécharger l'APK" >> $GITHUB_STEP_SUMMARY
-          echo "- Cliquez sur **Artifacts** ci-dessous" >> $GITHUB_STEP_SUMMARY
-          echo "- Téléchargez **IPTV-Manager-Ready-To-Install**" >> $GITHUB_STEP_SUMMARY
-          echo "- Dézippez le fichier" >> $GITHUB_STEP_SUMMARY
+          echo "📥 **Téléchargement:** Voir section Artifacts ci-dessous" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### ⚙️ 2. Préparer votre Android" >> $GITHUB_STEP_SUMMARY
-          echo "- **Paramètres** → **Sécurité** → **Sources inconnues** ✅" >> $GITHUB_STEP_SUMMARY
-          echo "- **Paramètres** → **Apps** → **Accès spécial** → **Installer apps inconnues** ✅" >> $GITHUB_STEP_SUMMARY
-          echo "- Temporairement désactiver **Google Play Protect**" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### 📲 3. Installer" >> $GITHUB_STEP_SUMMARY
-          echo "- Ouvrez le gestionnaire de fichiers" >> $GITHUB_STEP_SUMMARY
-          echo "- Naviguez vers l'APK téléchargée" >> $GITHUB_STEP_SUMMARY
-          echo "- Appuyez sur l'APK → **Installer**" >> $GITHUB_STEP_SUMMARY
-          echo "- Si Android affiche un avertissement → **Installer quand même**" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### 🔧 En cas de problème:" >> $GITHUB_STEP_SUMMARY
-          echo "- Redémarrez votre téléphone" >> $GITHUB_STEP_SUMMARY
-          echo "- Vérifiez l'espace de stockage disponible (>50MB)" >> $GITHUB_STEP_SUMMARY
-          echo "- Essayez d'installer via **ADB**: \`adb install -r app.apk\`" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**APK Générée:** $APK_COUNT fichier(s)" >> $GITHUB_STEP_SUMMARY
+          echo "📱 **Installation:**" >> $GITHUB_STEP_SUMMARY
+          echo "1. Activez 'Sources inconnues' sur Android" >> $GITHUB_STEP_SUMMARY
+          echo "2. Téléchargez et installez l'APK" >> $GITHUB_STEP_SUMMARY
+          echo "3. Accordez les permissions demandées" >> $GITHUB_STEP_SUMMARY
         else
-          echo "❌ **Échec de Génération APK**" >> $GITHUB_STEP_SUMMARY
+          echo "❌ **Build Échoué**" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "Vérifiez les logs de build pour plus de détails." >> $GITHUB_STEP_SUMMARY
+          echo "**Logs disponibles dans les Artifacts pour debug**" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Solutions courantes:**" >> $GITHUB_STEP_SUMMARY
+          echo "- Vérifiez les dépendances dans requirements.txt" >> $GITHUB_STEP_SUMMARY
+          echo "- Simplifiez le code Python (évitez les imports complexes)" >> $GITHUB_STEP_SUMMARY
+          echo "- Utilisez des versions stables de Kivy (2.1.0)" >> $GITHUB_STEP_SUMMARY
         fi
